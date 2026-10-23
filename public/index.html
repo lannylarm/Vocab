@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f4e5f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Vocab Builder</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Vocab Builder</h1>
+    <div class="profile">
+      <select id="profileSelect" aria-label="Learner"></select>
+      <button id="addProfile" class="ghost" title="Add learner">+</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="lookup">Look up</button>
+    <button class="tab" data-tab="review">Review <span id="dueBadge" class="badge hidden"></span></button>
+    <button class="tab" data-tab="words">My words</button>
+  </nav>
+
+  <main>
+    <!-- Look up -->
+    <section id="tab-lookup" class="panel">
+      <form id="lookupForm" class="search">
+        <input id="lookupInput" type="text" placeholder="Word or phrase, e.g. sweet as" autocomplete="off" autocapitalize="none" spellcheck="false">
+        <button type="submit">Search</button>
+      </form>
+      <div id="lookupResults"></div>
+    </section>
+
+    <!-- Review -->
+    <section id="tab-review" class="panel hidden">
+      <div id="reviewStart" class="center-card">
+        <p id="reviewSummary" class="muted">Loading…</p>
+        <div class="row">
+          <button id="startDue">Review due words</button>
+          <button id="startAll" class="secondary">Practise any 20</button>
+        </div>
+      </div>
+      <div id="reviewCard" class="hidden">
+        <div class="progress"><span id="reviewProgress"></span></div>
+        <div class="card">
+          <p id="reviewSentence" class="sentence"></p>
+          <form id="answerForm" class="search">
+            <input id="answerInput" type="text" placeholder="Type the missing word or phrase" autocomplete="off" autocapitalize="none" spellcheck="false">
+            <button type="submit" id="checkBtn">Check</button>
+          </form>
+          <div class="options-label">Similar words (none of these is the answer):</div>
+          <div id="reviewOptions" class="options"></div>
+          <div id="reviewFeedback" class="feedback hidden"></div>
+          <button id="nextBtn" class="hidden">Next</button>
+        </div>
+      </div>
+      <div id="reviewDone" class="center-card hidden"></div>
+    </section>
+
+    <!-- My words -->
+    <section id="tab-words" class="panel hidden">
+      <input id="wordsFilter" class="filter" type="search" placeholder="Filter my words">
+      <div id="wordsList"></div>
+    </section>
+  </main>
+
+  <div id="saveBar" class="savebar hidden">
+    <span id="saveCount"></span>
+    <button id="saveBtn">Save selected</button>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <div id="loginOverlay" class="overlay hidden">
+    <form id="loginForm" class="center-card">
+      <h2>Vocab Builder</h2>
+      <input id="passcode" type="password" placeholder="Passcode" autocomplete="current-password">
+      <button type="submit">Enter</button>
+      <p id="loginError" class="error"></p>
+    </form>
+  </div>
+
+  <footer class="credits">
+    Definitions from Merriam-Webster’s Learner’s and Collegiate dictionaries, and from Wiktionary via kaikki.org (CC BY-SA 4.0).
+    Meanings marked “AI” are generated and may contain errors.
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

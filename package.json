@@ -1,0 +1,19 @@
+{
+  "name": "vocab-builder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Family vocabulary builder: look up words/phrases, save selected meanings, review with cloze sentences.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/parsers.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "openai": "^5.0.0",
+    "pg": "^8.13.1"
+  }
+}
