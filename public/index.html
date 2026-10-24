@@ -14,8 +14,16 @@
     <div class="profile">
       <select id="profileSelect" aria-label="Learner"></select>
       <button id="addProfile" class="ghost" title="Add learner">+</button>
+      <button id="settingsBtn" class="ghost" title="Settings" aria-label="Settings">⚙</button>
     </div>
   </header>
+  <div id="settingsPanel" class="settings hidden">
+    <label><input type="checkbox" id="autoplayToggle"> Play pronunciation automatically</label>
+    <label>Accent for auto-play
+      <select id="accentSelect"><option value="uk">UK</option><option value="us">US</option></select>
+    </label>
+    <p class="muted">Saved on this device only.</p>
+  </div>
 
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="lookup">Look up</button>

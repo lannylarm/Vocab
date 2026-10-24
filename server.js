@@ -14,7 +14,7 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
 
 // Bump when parsers change so cached results are re-parsed.
-const PARSER_VERSION = 2;
+const PARSER_VERSION = 3;
 const MW_LEARNERS_KEY = process.env.MW_LEARNERS_KEY;
 const MW_COLLEGIATE_KEY = process.env.MW_COLLEGIATE_KEY;
 
@@ -164,6 +164,8 @@ app.get('/api/lookup', wrap(async (req, res) => {
         const p = pronunciations.find((x) => x.pos === (it.pos || '').toLowerCase()) || pronunciations[0];
         it.ipa_uk = p.uk;
         it.ipa_us = p.us;
+        it.audio_uk = p.ukAudio;
+        it.audio_us = p.usAudio;
       }
     }
   }
@@ -196,6 +198,16 @@ app.post('/api/ai-more', wrap(async (req, res) => {
 }));
 
 // ---------- Saved meanings ----------
+const AUDIO_HOSTS = ['media.merriam-webster.com', 'upload.wikimedia.org'];
+function safeAudio(u) {
+  try {
+    const url = new URL(String(u || ''));
+    return url.protocol === 'https:' && AUDIO_HOSTS.includes(url.hostname) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 app.post('/api/save', wrap(async (req, res) => {
   const pid = profileId(req);
   const items = (req.body?.items || []).slice(0, 30);
@@ -216,8 +228,8 @@ app.post('/api/save', wrap(async (req, res) => {
       const r = await pool.query(
         `INSERT INTO vocab_senses
            (profile_id, headword, entry_type, pos, definition, example, labels, source, variants, distractors,
-            ipa_uk, ipa_us)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ipa_uk, ipa_us, audio_uk, audio_us)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT DO NOTHING`,
         [
           pid, headword, headword.includes(' ') ? 'phrase' : 'word', it.pos || '', definition,
@@ -225,6 +237,8 @@ app.post('/api/save', wrap(async (req, res) => {
           JSON.stringify(material.variants), JSON.stringify(material.distractors),
           headword.includes(' ') ? null : it.ipa_uk || null,
           headword.includes(' ') ? null : it.ipa_us || null,
+          headword.includes(' ') ? null : safeAudio(it.audio_uk),
+          headword.includes(' ') ? null : safeAudio(it.audio_us),
         ]
       );
       saved += r.rowCount;
@@ -236,7 +250,7 @@ app.post('/api/save', wrap(async (req, res) => {
 app.get('/api/words', wrap(async (req, res) => {
   const pid = profileId(req);
   const r = await pool.query(
-    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us,
+    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us, audio_uk, audio_us,
             correct_count, wrong_count, jsonb_array_length(variants) AS sentence_count, created_at
      FROM vocab_senses WHERE profile_id=$1 ORDER BY created_at DESC`,
     [pid]
@@ -346,6 +360,9 @@ app.post('/api/review/:id/answer', wrap(async (req, res) => {
     pos: row.pos,
     ipa_uk: row.ipa_uk,
     ipa_us: row.ipa_us,
+    audio_uk: row.audio_uk,
+    audio_us: row.audio_us,
+    entry_type: row.entry_type,
     nextInDays: correct ? INTERVALS[level] : 0,
   });
 }));

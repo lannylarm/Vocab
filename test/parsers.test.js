@@ -1,6 +1,6 @@
 // Offline tests for the dictionary parsers, using fixtures shaped like real API responses.
 import assert from 'node:assert/strict';
-import { parseMw, cleanMarkup } from '../sources/mw.js';
+import { parseMw, cleanMarkup, mwAudioUrl } from '../sources/mw.js';
 import { parseWikt } from '../sources/wiktionary.js';
 import { mergePron } from '../sources/pron.js';
 
@@ -68,7 +68,13 @@ assert.deepEqual(r.suggestions, ['run']);
 // --- Pronunciation ---
 mwTake[0].hwi.prs = [{ ipa: 'ˈteɪk' }];
 r = parseMw(mwTake, 'take', 'mw-learners');
-assert.deepEqual(r.pron, [{ pos: 'verb', uk: null, us: '/ˈteɪk/' }]);
+assert.deepEqual(r.pron, [{ pos: 'verb', uk: null, us: '/ˈteɪk/', ukAudio: null, usAudio: null }]);
+mwTake[0].hwi.prs = [{ ipa: 'ˈteɪk', sound: { audio: 'take0001' } }];
+r = parseMw(mwTake, 'take', 'mw-learners');
+assert.equal(r.pron[0].usAudio, 'https://media.merriam-webster.com/audio/prons/en/us/mp3/t/take0001.mp3');
+assert.match(mwAudioUrl('bixoo01'), /\/mp3\/bix\/bixoo01\.mp3$/);
+assert.match(mwAudioUrl('ggask01'), /\/mp3\/gg\//);
+assert.match(mwAudioUrl('3d000001'), /\/mp3\/number\//);
 
 const wiktTomato = [{
   word: 'tomato', lang_code: 'en', pos: 'noun',
@@ -76,20 +82,26 @@ const wiktTomato = [{
     { ipa: '/təˈmɑːtəʊ/', tags: ['Received-Pronunciation'] },
     { ipa: '[tʰəˈmɑːtəʊ]', tags: ['Received-Pronunciation'] },
     { ipa: '/təˈmeɪtoʊ/', tags: ['General-American'] },
-    { audio: 'x.ogg' },
+    { audio: 'En-uk-tomato.ogg', mp3_url: 'https://upload.wikimedia.org/a/En-uk-tomato.ogg.mp3' },
+    { audio: 'en-us-tomato.ogg', mp3_url: 'https://upload.wikimedia.org/b/en-us-tomato.ogg.mp3', tags: ['US'] },
   ],
   senses: [{ glosses: ['A fruit.'] }],
 }];
 const wt = parseWikt(wiktTomato);
-assert.deepEqual(wt.pron, [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtoʊ/' }]);
+assert.deepEqual(wt.pron, [{
+  pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtoʊ/',
+  ukAudio: 'https://upload.wikimedia.org/a/En-uk-tomato.ogg.mp3',
+  usAudio: 'https://upload.wikimedia.org/b/en-us-tomato.ogg.mp3',
+}]);
 
 const merged = mergePron([
-  { id: 'mw-learners', pron: [{ pos: 'noun', uk: null, us: '/təˈmeɪtoʊ/' }] },
-  { id: 'wiktionary', pron: [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtəʊ/' }] },
+  { id: 'mw-learners', pron: [{ pos: 'noun', uk: null, us: '/təˈmeɪtoʊ/', ukAudio: null, usAudio: 'mw.mp3' }] },
+  { id: 'wiktionary', pron: [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtəʊ/', ukAudio: 'wk-uk.mp3', usAudio: 'wk-us.mp3' }] },
 ]);
-assert.deepEqual(merged, [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtoʊ/' }], 'UK from Wiktionary, US from MW');
+assert.deepEqual(merged, [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈmeɪtoʊ/', ukAudio: 'wk-uk.mp3', usAudio: 'mw.mp3' }],
+  'UK from Wiktionary, US from MW');
 
 const untagged = parseWikt([{ word: 'cat', lang_code: 'en', pos: 'noun', sounds: [{ ipa: '/kæt/' }], senses: [{ glosses: ['An animal.'] }] }]);
-assert.deepEqual(untagged.pron[0], { pos: 'noun', uk: '/kæt/', us: '/kæt/' }, 'untagged IPA applies to both');
+assert.deepEqual(untagged.pron[0], { pos: 'noun', uk: '/kæt/', us: '/kæt/', ukAudio: null, usAudio: null }, 'untagged IPA applies to both');
 
 console.log('All parser tests passed.');

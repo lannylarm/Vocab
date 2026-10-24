@@ -141,7 +141,7 @@ export function parseMw(json, query, source) {
   const addEntry = (e) => {
     const headword = entryHeadword(e);
     const p = mwPron(e);
-    if (p.uk || p.us) out.pron.push({ pos: e.fl || '', ...p });
+    if (p.uk || p.us || p.ukAudio || p.usAudio) out.pron.push({ pos: e.fl || '', ...p });
     const ctx = { headword, pos: e.fl || '', entryLabels: [...(e.lbs || []), ...(e.sls || [])], source };
     out.senses.push(...itemsFromDefs(e.def, ctx));
     if (!isPhrase) {
@@ -187,14 +187,29 @@ export function parseMw(json, query, source) {
 export function mwPron(e) {
   let uk = null;
   let us = null;
+  let ukAudio = null;
+  let usAudio = null;
   for (const p of e.hwi?.prs || []) {
-    if (!p.ipa) continue;
-    const ipa = `/${cleanMarkup(p.ipa)}/`;
     const label = `${p.l || ''} ${p.l2 || ''}`;
-    if (/brit/i.test(label)) uk ??= ipa;
-    else if (!label.trim() || /us|american/i.test(label)) us ??= ipa;
+    const isUk = /brit/i.test(label);
+    const isUs = !label.trim() || /us|american/i.test(label);
+    const ipa = p.ipa ? `/${cleanMarkup(p.ipa)}/` : null;
+    const audio = mwAudioUrl(p.sound?.audio);
+    if (isUk) { uk ??= ipa; ukAudio ??= audio; }
+    else if (isUs) { us ??= ipa; usAudio ??= audio; }
   }
-  return { uk, us };
+  return { uk, us, ukAudio, usAudio };
+}
+
+/** MW audio file URL, per https://dictionaryapi.com/products/json (section "sound"). */
+export function mwAudioUrl(name) {
+  if (!name) return null;
+  let dir;
+  if (name.startsWith('bix')) dir = 'bix';
+  else if (name.startsWith('gg')) dir = 'gg';
+  else if (/^[^a-z]/i.test(name)) dir = 'number';
+  else dir = name[0];
+  return `https://media.merriam-webster.com/audio/prons/en/us/mp3/${dir}/${encodeURIComponent(name)}.mp3`;
 }
 
 function dedupe(items) {

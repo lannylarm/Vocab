@@ -56,6 +56,19 @@ export function wiktPron(sounds) {
   let uk = null;
   let us = null;
   let generic = null;
+  let ukAudio = null;
+  let usAudio = null;
+  for (const s of sounds || []) {
+    // mp3 only: Safari/iOS cannot play Ogg.
+    const url = s.mp3_url;
+    if (!url) continue;
+    const tags = s.tags || [];
+    const file = String(s.audio || url);
+    const isUk = tags.some((t) => UK_TAGS.has(t)) || /en-(uk|gb)-/i.test(file);
+    const isUs = tags.some((t) => US_TAGS.has(t)) || /en-us-/i.test(file);
+    if (isUk && !isUs) ukAudio ??= url;
+    if (isUs && !isUk) usAudio ??= url;
+  }
   const better = (cur, ipa) => !cur || (!cur.startsWith('/') && ipa.startsWith('/'));
   for (const s of sounds || []) {
     if (!s.ipa) continue;
@@ -67,7 +80,7 @@ export function wiktPron(sounds) {
   }
   // An untagged pronunciation applies to both accents.
   if (generic) { uk ??= generic; us ??= generic; }
-  return { uk, us };
+  return { uk, us, ukAudio, usAudio };
 }
 
 export function parseWikt(entries, source = 'wiktionary') {
@@ -76,7 +89,7 @@ export function parseWikt(entries, source = 'wiktionary') {
   for (const e of entries || []) {
     const pos = POS_NAMES[e.pos] || e.pos || '';
     const p = wiktPron(e.sounds);
-    if (p.uk || p.us) out.pron.push({ pos, ...p });
+    if (p.uk || p.us || p.ukAudio || p.usAudio) out.pron.push({ pos, ...p });
     for (const s of e.senses || []) {
       const targets = [...(s.form_of || []), ...(s.alt_of || [])].map((f) => f.word).filter(Boolean);
       if (targets.length) {

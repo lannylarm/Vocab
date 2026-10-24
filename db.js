@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS vocab_senses (
 
 ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS ipa_uk TEXT;
 ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS ipa_us TEXT;
+ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS audio_uk TEXT;
+ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS audio_us TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS vocab_senses_uniq
   ON vocab_senses (profile_id, lower(headword), md5(definition));

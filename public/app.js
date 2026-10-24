@@ -18,12 +18,65 @@ const state = {
   words: [],
 };
 
-function ipaHtml(uk, us) {
-  const parts = [];
-  if (uk) parts.push(`<span class="accent">UK</span> <span class="ipa">${esc(uk)}</span>`);
-  if (us) parts.push(`<span class="accent">US</span> <span class="ipa">${esc(us)}</span>`);
-  return parts.length ? `<div class="pron">${parts.join('<span class="sep">·</span>')}</div>` : '';
+// ---------- Pronunciation ----------
+const settings = {
+  get autoplay() { return store.get('vocab.autoplay') === '1'; }, // off by default
+  get accent() { return store.get('vocab.accent') || 'uk'; },
+};
+
+/**
+ * UK / US rows: accent label, IPA (single words only), speaker button.
+ * Plays the dictionary recording when there is one, otherwise the device's voice.
+ */
+function pronHtml(text, p = {}, showIpa = true) {
+  const row = (acc, ipa, audio) => `<span class="accent">${acc.toUpperCase()}</span>
+    ${showIpa && ipa ? `<span class="ipa">${esc(ipa)}</span>` : ''}
+    <button type="button" class="say" title="Play ${acc.toUpperCase()} pronunciation"
+      data-text="${esc(text)}" data-lang="${acc === 'uk' ? 'en-GB' : 'en-US'}" data-audio="${esc(audio || '')}"
+      data-acc="${acc}" aria-label="Play ${acc.toUpperCase()} pronunciation">🔊</button>`;
+  return `<div class="pron">${row('uk', p.uk, p.ukAudio)}<span class="sep">·</span>${row('us', p.us, p.usAudio)}</div>`;
 }
+
+let player;
+function speakTts(text, lang) {
+  if (!('speechSynthesis' in window)) return toast('This device cannot play speech.');
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
+  const voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-') === lang);
+  if (voice) u.voice = voice;
+  u.rate = 0.9;
+  speechSynthesis.speak(u);
+}
+function playPron(btn) {
+  const { text, lang, audio } = btn.dataset;
+  if (player) player.pause();
+  if (!audio) return speakTts(text, lang);
+  player = new Audio(audio);
+  player.play().catch(() => speakTts(text, lang));
+  player.onerror = () => speakTts(text, lang);
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.say');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  playPron(btn);
+});
+function autoPlayIn(container) {
+  if (!settings.autoplay) return;
+  const btn = container.querySelector(`.say[data-acc="${settings.accent}"]`) || container.querySelector('.say');
+  if (btn) playPron(btn);
+}
+
+// ---------- Settings ----------
+$('#settingsBtn').addEventListener('click', () => {
+  $('#autoplayToggle').checked = settings.autoplay;
+  $('#accentSelect').value = settings.accent;
+  $('#settingsPanel').classList.toggle('hidden');
+});
+$('#autoplayToggle').addEventListener('change', (e) => store.set('vocab.autoplay', e.target.checked ? '1' : '0'));
+$('#accentSelect').addEventListener('change', (e) => store.set('vocab.accent', e.target.value));
 
 // ---------- API ----------
 async function api(path, opts = {}) {
@@ -180,19 +233,26 @@ function renderLookup() {
     html += '</div>';
   }
 
-  // Pronunciation (single words only), grouped where parts of speech share it.
-  const prons = state.lookup.pronunciations || [];
-  if (prons.length) {
-    const groups = new Map();
-    for (const pr of prons) {
-      const k = `${pr.uk}|${pr.us}`;
-      if (!groups.has(k)) groups.set(k, { ...pr, poses: [] });
-      groups.get(k).poses.push(pr.pos);
+  // Pronunciation header. IPA for single words only; phrases get speaker buttons only.
+  const isPhrase = query.includes(' ');
+  const prons = isPhrase ? [] : state.lookup.pronunciations || [];
+  if (total) {
+    let rowsHtml;
+    if (prons.length) {
+      const groups = new Map();
+      for (const pr of prons) {
+        const k = `${pr.uk}|${pr.us}|${pr.ukAudio}|${pr.usAudio}`;
+        if (!groups.has(k)) groups.set(k, { ...pr, poses: [] });
+        groups.get(k).poses.push(pr.pos);
+      }
+      const rows = [...groups.values()];
+      rowsHtml = rows
+        .map((g) => (rows.length > 1 ? `<div class="pos">${esc(g.poses.filter(Boolean).join(', '))}</div>` : '') + pronHtml(query, g))
+        .join('');
+    } else {
+      rowsHtml = pronHtml(query, {}, !isPhrase);
     }
-    const rows = [...groups.values()];
-    html = `<div class="pron-block"><div class="hw-big">${esc(query)}</div>${rows
-      .map((g) => (rows.length > 1 ? `<div class="pos">${esc(g.poses.filter(Boolean).join(', '))}</div>` : '') + ipaHtml(g.uk, g.us))
-      .join('')}</div>` + html;
+    html = `<div class="pron-block"><div class="hw-big">${esc(query)}</div>${rowsHtml}</div>` + html;
   }
 
   if (!total) html = `<p class="muted">No dictionary entry found for “${esc(query)}”.</p>` + html;
@@ -205,6 +265,7 @@ function renderLookup() {
     html += `<div class="ai-more"><button id="aiMoreBtn" class="ghost">Ask AI for missing meanings (incl. NZ usage)</button></div>`;
   }
   $('#lookupResults').innerHTML = html;
+  autoPlayIn($('#lookupResults'));
 }
 
 $('#lookupResults').addEventListener('change', (e) => {
@@ -270,6 +331,8 @@ $('#saveBtn').addEventListener('click', async () => {
       source: it.source,
       ipa_uk: it.ipa_uk || null,
       ipa_us: it.ipa_us || null,
+      audio_uk: it.audio_uk || null,
+      audio_us: it.audio_us || null,
     };
   });
   btn.disabled = true;
@@ -371,12 +434,13 @@ $('#answerForm').addEventListener('submit', async (e) => {
     fb.className = `feedback ${res.result}`;
     fb.innerHTML = `<div class="verdict">${esc(verdict)}</div>
       <div><strong>${esc(res.headword)}</strong> <span class="pos">${esc(res.pos)}</span></div>
-      ${ipaHtml(res.ipa_uk, res.ipa_us)}
+      ${pronHtml(res.headword, { uk: res.ipa_uk, us: res.ipa_us, ukAudio: res.audio_uk, usAudio: res.audio_us }, res.entry_type === 'word')}
       <div class="def">${esc(res.definition)}</div>
       ${res.example ? `<div class="ex">${esc(res.example)}</div>` : ''}
       ${next ? `<div class="muted" style="margin-top:6px;font-size:14px">${esc(next)}</div>` : ''}`;
     $('#nextBtn').classList.remove('hidden');
     $('#nextBtn').focus();
+    autoPlayIn(fb);
   } catch (err) {
     toast(err.message);
     $('#checkBtn').disabled = false;
@@ -435,7 +499,7 @@ function renderWords() {
           <button class="ghost small" data-del="${w.id}">Delete</button>
         </div>
       </div>
-      ${w.entry_type === 'word' ? ipaHtml(w.ipa_uk, w.ipa_us) : ''}
+      ${pronHtml(w.headword, { uk: w.ipa_uk, us: w.ipa_us, ukAudio: w.audio_uk, usAudio: w.audio_us }, w.entry_type === 'word')}
       <div class="def">${esc(w.definition)}</div>
       ${w.example ? `<div class="ex">${esc(w.example)}</div>` : ''}
       <div class="stats">Level ${w.level} · ${dueText(w.due_at)} · ✓ ${w.correct_count} ✗ ${w.wrong_count}${w.sentence_count ? '' : ' · sentences pending'}</div>
