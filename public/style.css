@@ -132,3 +132,6 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 .settings select { width: auto; padding: 4px 8px; }
 .settings p { margin: 0; font-size: 13px; width: 100%; }
 @media (max-width: 760px) { .settings { margin: 0 16px 8px; } }
+
+.topbar h1 { display: flex; align-items: center; gap: 10px; }
+.logo { width: 30px; height: 30px; border-radius: 7px; }

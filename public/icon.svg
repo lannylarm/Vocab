@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f7f96"/>
+      <stop offset="1" stop-color="#143844"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef3f4"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- back card -->
+  <rect x="118" y="112" width="268" height="300" rx="34" fill="#ffffff" opacity="0.22" transform="rotate(-10 252 262)"/>
+  <!-- front card -->
+  <g transform="rotate(5 268 268)">
+    <rect x="132" y="104" width="272" height="312" rx="36" fill="url(#card)"/>
+    <!-- V -->
+    <path d="M182 166 L238 166 L268 268 L298 166 L354 166 L296 334 Q290 352 268 352 Q246 352 240 334 Z" fill="#1f4e5f"/>
+    <!-- underline -->
+    <rect x="200" y="372" width="136" height="14" rx="7" fill="#1f4e5f" opacity="0.18"/>
+  </g>
+  <!-- spark -->
+  <circle cx="392" cy="128" r="34" fill="#f2b84b"/>
+  <circle cx="392" cy="128" r="14" fill="#fff4dc"/>
+</svg>

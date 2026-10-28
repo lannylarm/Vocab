@@ -336,10 +336,12 @@ $('#saveBtn').addEventListener('click', async () => {
     };
   });
   btn.disabled = true;
-  btn.textContent = 'Saving… (making practice sentences)';
+  btn.textContent = 'Saving…';
   try {
     const r = await api('/api/save', { method: 'POST', body: JSON.stringify({ items }) });
-    toast(`Saved ${r.saved} meaning${r.saved === 1 ? '' : 's'}.` + (r.failures.length ? ' Some practice sentences will be made later.' : ''));
+    toast(r.saved
+      ? `Saved ${r.saved} meaning${r.saved === 1 ? '' : 's'}. Practice sentences are being prepared.`
+      : 'Already saved.');
     await runLookup(state.lookup.query);
     refreshStats();
   } catch (err) {
@@ -464,13 +466,21 @@ function nextItem() {
 }
 
 // ---------- My words ----------
-async function loadWords() {
-  $('#wordsList').innerHTML = '<p class="spinner">Loading…</p>';
+let wordsPoll;
+async function loadWords(silent = false) {
+  clearTimeout(wordsPoll);
+  if (!silent) $('#wordsList').innerHTML = '<p class="spinner">Loading…</p>';
   try {
     state.words = await api('/api/words');
     renderWords();
+    // While practice sentences are still being generated, check again every 5 s (only on this tab).
+    if (state.words.some((w) => !w.sentence_count)) {
+      wordsPoll = setTimeout(() => {
+        if (!$('#tab-words').classList.contains('hidden') && !document.hidden) loadWords(true);
+      }, 5000);
+    }
   } catch (err) {
-    $('#wordsList').innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    if (!silent) $('#wordsList').innerHTML = `<p class="error">${esc(err.message)}</p>`;
   }
 }
 
@@ -502,7 +512,7 @@ function renderWords() {
       ${pronHtml(w.headword, { uk: w.ipa_uk, us: w.ipa_us, ukAudio: w.audio_uk, usAudio: w.audio_us }, w.entry_type === 'word')}
       <div class="def">${esc(w.definition)}</div>
       ${w.example ? `<div class="ex">${esc(w.example)}</div>` : ''}
-      <div class="stats">Level ${w.level} · ${dueText(w.due_at)} · ✓ ${w.correct_count} ✗ ${w.wrong_count}${w.sentence_count ? '' : ' · sentences pending'}</div>
+      <div class="stats">Level ${w.level} · ${dueText(w.due_at)} · ✓ ${w.correct_count} ✗ ${w.wrong_count}${w.sentence_count ? '' : ' · preparing sentences…'}</div>
     </div>`).join('');
 }
 
@@ -549,3 +559,15 @@ async function start() {
     toast('Cannot reach the server.');
   }
 })();
+
+// Resume the "My words" update when the page becomes visible again.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && !$('#tab-words').classList.contains('hidden') && state.words.some((w) => !w.sentence_count)) {
+    loadWords(true);
+  }
+});
+
+// Tapping/clicking the search box clears the previous word (but not while you are already typing in it).
+$('#lookupInput').addEventListener('pointerdown', (e) => {
+  if (document.activeElement !== e.currentTarget) e.currentTarget.value = '';
+});

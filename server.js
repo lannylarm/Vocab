@@ -211,40 +211,36 @@ function safeAudio(u) {
 app.post('/api/save', wrap(async (req, res) => {
   const pid = profileId(req);
   const items = (req.body?.items || []).slice(0, 30);
-  let saved = 0;
-  const failures = [];
+  const inserted = [];
   await Promise.all(
     items.map(async (it) => {
       const headword = cleanQuery(it.headword);
       const definition = String(it.definition || '').trim();
       if (!headword || !definition) return;
-      let material = { variants: [], distractors: [] };
-      try {
-        material = await aiReviewMaterial({ headword, pos: it.pos, definition, example: it.example });
-      } catch (err) {
-        // Saved anyway; practice sentences are generated later at review time.
-        failures.push(`${headword}: ${err.message}`);
-      }
+      // Save immediately; practice sentences are generated in the background.
       const r = await pool.query(
         `INSERT INTO vocab_senses
-           (profile_id, headword, entry_type, pos, definition, example, labels, source, variants, distractors,
+           (profile_id, headword, entry_type, pos, definition, example, labels, source,
             ipa_uk, ipa_us, audio_uk, audio_us)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-         ON CONFLICT DO NOTHING`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         ON CONFLICT DO NOTHING
+         RETURNING *`,
         [
           pid, headword, headword.includes(' ') ? 'phrase' : 'word', it.pos || '', definition,
           it.example || '', (it.labels || []).map(String), String(it.source || 'unknown'),
-          JSON.stringify(material.variants), JSON.stringify(material.distractors),
           headword.includes(' ') ? null : it.ipa_uk || null,
           headword.includes(' ') ? null : it.ipa_us || null,
           headword.includes(' ') ? null : safeAudio(it.audio_uk),
           headword.includes(' ') ? null : safeAudio(it.audio_us),
         ]
       );
-      saved += r.rowCount;
+      inserted.push(...r.rows);
     })
   );
-  res.json({ saved, failures });
+  res.json({ saved: inserted.length });
+  for (const row of inserted) {
+    regenerate(row).catch((err) => console.error('background sentences failed', row.id, err.message));
+  }
 }));
 
 app.get('/api/words', wrap(async (req, res) => {
@@ -264,7 +260,31 @@ app.delete('/api/words/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-async function regenerate(row) {
+// One generation per row at a time, shared by background saves, review and the "New sentences" button.
+const generating = new Map();
+function regenerate(row) {
+  if (!generating.has(row.id)) {
+    const job = doRegenerate(row).finally(() => generating.delete(row.id));
+    generating.set(row.id, job);
+  }
+  return generating.get(row.id);
+}
+
+/** After a restart, finish any saved meanings that still have no practice sentences. */
+async function backfillSentences() {
+  const r = await pool.query(
+    "SELECT * FROM vocab_senses WHERE jsonb_array_length(variants) = 0 ORDER BY created_at LIMIT 100"
+  );
+  for (const row of r.rows) {
+    try {
+      await regenerate(row);
+    } catch (err) {
+      console.error('backfill failed', row.id, err.message);
+    }
+  }
+}
+
+async function doRegenerate(row) {
   const m = await aiReviewMaterial({
     headword: row.headword, pos: row.pos, definition: row.definition, example: row.example,
   });
@@ -376,7 +396,10 @@ app.use((err, req, res, _next) => res.status(err.status || 500).json({ error: er
 
 const PORT = process.env.PORT || 3000;
 initDb()
-  .then(() => app.listen(PORT, () => console.log(`Vocab Builder listening on ${PORT}`)))
+  .then(() => {
+    app.listen(PORT, () => console.log(`Vocab Builder listening on ${PORT}`));
+    if (process.env.OPENAI_API_KEY) backfillSentences().catch((err) => console.error('backfill', err.message));
+  })
   .catch((err) => {
     console.error('Database init failed:', err);
     process.exit(1);
