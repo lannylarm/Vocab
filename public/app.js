@@ -47,29 +47,84 @@ function unlockAudio() {
   player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
   player.play().catch(() => {});
   if ('speechSynthesis' in window) speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  warmUp(); // create the audio context inside a user gesture
 }
 ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, unlockAudio, { capture: true, once: true }));
 
+/*
+ * Many speakers and headphones (Bluetooth, HDMI monitors, some Windows drivers) power down after a few
+ * seconds of silence and need ~0.2–0.5 s to wake up, which cuts off the first syllable. Before playing,
+ * we keep an inaudible signal running so the output is awake, and wait for it once if it was asleep.
+ * The signal stops 20 s after the last playback to save battery.
+ */
+const WARM_MS = 400;
+let warmCtx = null;
+let warmSince = 0;
+let coolTimer;
+function warmUp() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return 0;
+    if (!warmCtx) {
+      warmCtx = new AC();
+      const osc = warmCtx.createOscillator();
+      const gain = warmCtx.createGain();
+      osc.frequency.value = 30;   // below hearing at this level
+      gain.gain.value = 0.0005;   // about -66 dB: inaudible, but not digital silence
+      osc.connect(gain).connect(warmCtx.destination);
+      osc.start();
+    }
+    if (warmCtx.state !== 'running') {
+      warmCtx.resume().catch(() => {});
+      warmSince = performance.now();
+    } else if (!warmSince) {
+      warmSince = performance.now();
+    }
+    clearTimeout(coolTimer);
+    coolTimer = setTimeout(() => {
+      warmCtx.suspend().catch(() => {});
+      warmSince = 0;
+    }, 20000);
+    return Math.max(0, WARM_MS - (performance.now() - warmSince));
+  } catch {
+    return 0;
+  }
+}
+
+let lastUtterance; // keep a reference: Chrome can drop utterances that are garbage-collected
 function speakTts(text, lang) {
   if (!('speechSynthesis' in window)) return toast('This device cannot play speech.');
-  speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = lang;
   const voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-') === lang);
   if (voice) u.voice = voice;
   u.rate = 0.9;
-  speechSynthesis.speak(u);
+  lastUtterance = u;
+  // Calling speak() straight after cancel() clips the start in Chrome, so only cancel when needed.
+  if (speechSynthesis.speaking || speechSynthesis.pending) {
+    speechSynthesis.cancel();
+    setTimeout(() => speechSynthesis.speak(u), 80);
+  } else {
+    speechSynthesis.speak(u);
+  }
 }
+
+let sayTimer;
 function say(text, lang, audio) {
   player.pause();
-  if ('speechSynthesis' in window) speechSynthesis.cancel();
-  if (!audio) return speakTts(text, lang);
-  // Fall back to the device voice once if the recording cannot be played.
-  let fellBack = false;
-  const fallback = () => { if (!fellBack) { fellBack = true; speakTts(text, lang); } };
-  player.onerror = fallback;
-  player.src = audio;
-  player.play().catch((err) => { if (err?.name !== 'AbortError') fallback(); });
+  clearTimeout(sayTimer);
+  const wait = warmUp();
+  sayTimer = setTimeout(() => {
+    if (!audio) return speakTts(text, lang);
+    if ('speechSynthesis' in window && speechSynthesis.speaking) speechSynthesis.cancel();
+    // Fall back to the device voice once if the recording cannot be played.
+    let fellBack = false;
+    const fallback = () => { if (!fellBack) { fellBack = true; speakTts(text, lang); } };
+    player.onerror = fallback;
+    player.src = audio;
+    player.currentTime = 0;
+    player.play().catch((err) => { if (err?.name !== 'AbortError') fallback(); });
+  }, wait);
 }
 function playPron(btn) {
   const { text, lang, audio } = btn.dataset;
