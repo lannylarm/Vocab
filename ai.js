@@ -99,7 +99,11 @@ const REVIEW_SYSTEM = `You create fill-in-the-blank practice for English learner
 
 export const BLANK = '_____';
 
-/** Generate 3 cloze sentences and 3 confusable distractors for one saved meaning. */
+export const DISTRACTOR_COUNT = 4;
+// Bump when the practice material changes shape; older saved meanings are regenerated once.
+export const MATERIAL_VERSION = 2;
+
+/** Generate 3 cloze sentences and 4 confusable distractors for one saved meaning. */
 export async function aiReviewMaterial({ headword, pos, definition, example }) {
   const user = `Target: "${headword}"${pos ? ` (${pos})` : ''}
 Meaning to practise: "${definition}"${example ? `\nDictionary example: "${example}"` : ''}
@@ -107,7 +111,7 @@ Meaning to practise: "${definition}"${example ? `\nDictionary example: "${exampl
 1. Write 3 different natural sentences (8–20 words) that use the target in THIS meaning only, with clear context clues.
    In each sentence replace the target, in whatever form fits the grammar (e.g. "took off", "runs"), with exactly ${BLANK} (five underscores).
    Keep all words of a phrase together so one blank covers the whole target. Put the exact replaced text in "answer".
-2. Give 3 distractors: real English words or phrases with the same part of speech and a similar form or meaning,
+2. Give 5 distractors: real English words or phrases with the same part of speech and a similar form or meaning,
    which a learner might confuse with the target but which do NOT fit any of the sentences. Use their base form.`;
   const data = await jsonCall('review', REVIEW_SCHEMA, REVIEW_SYSTEM, user);
 
@@ -117,7 +121,9 @@ Meaning to practise: "${definition}"${example ? `\nDictionary example: "${exampl
     const answer = (v.answer || '').trim();
     if (!answer) continue;
     if (!sentence.includes(BLANK)) {
-      const re = new RegExp(answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      // Whole-word match, so "run" does not match inside "brunch".
+      const esc = answer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`(?<![\\p{L}\\p{N}'])${esc}(?![\\p{L}\\p{N}])`, 'iu');
       if (!re.test(sentence)) continue;
       sentence = sentence.replace(re, BLANK);
     }
@@ -130,6 +136,34 @@ Meaning to practise: "${definition}"${example ? `\nDictionary example: "${exampl
   const hw = headword.toLowerCase();
   const distractors = [...new Set((data.distractors || []).map((d) => d.trim()).filter(Boolean))]
     .filter((d) => d.toLowerCase() !== hw && !variants.some((v) => v.answer.toLowerCase() === d.toLowerCase()))
-    .slice(0, 3);
+    .slice(0, DISTRACTOR_COUNT);
   return { variants: variants.slice(0, 3), distractors };
+}
+
+const IPA_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['uk', 'us'],
+  properties: { uk: { type: 'string' }, us: { type: 'string' } },
+};
+
+/**
+ * Last-resort IPA for a single word that no dictionary covers. The page labels the result "AI".
+ * Returns { uk, us } with empty strings where the model is not confident.
+ */
+export async function aiIpa(word) {
+  const data = await jsonCall(
+    'ipa',
+    IPA_SCHEMA,
+    `You give dictionary-style IPA transcriptions of English words, like a learner's dictionary
+(UK: standard Southern British; US: General American). Use slashes and a primary stress mark, e.g. /ˈwɔːtə/ and /ˈwɑːtər/.
+If the word is not a real English word, or you are not confident of its pronunciation, return an empty string for that accent.`,
+    `Word: "${word}"`
+  );
+  const clean = (s) => {
+    const t = String(s || '').trim();
+    if (!t) return null;
+    return t.startsWith('/') ? t : `/${t.replace(/^\[|\]$/g, '')}/`;
+  };
+  return { uk: clean(data.uk), us: clean(data.us) };
 }

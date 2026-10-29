@@ -5,6 +5,8 @@
  */
 export function mergePron(sources) {
   const mw = sources.find((s) => s.id === 'mw-learners')?.pron || [];
+  // Collegiate has no IPA, but its recordings are useful when Learner's has none.
+  const col = (sources.find((s) => s.id === 'mw-collegiate')?.pron || []).map((p) => ({ ...p, uk: null, us: null }));
   const wk = sources.find((s) => s.id === 'wiktionary')?.pron || [];
   const byPos = new Map();
   const FIELDS = ['uk', 'us', 'ukAudio', 'usAudio'];
@@ -18,6 +20,7 @@ export function mergePron(sources) {
     byPos.set(pos, cur);
   };
   wk.forEach((p) => put(p, ['uk', 'ukAudio']));
+  col.forEach((p) => put(p, ['usAudio']));
   mw.forEach((p) => put(p, ['us', 'usAudio']));
   const list = [...byPos.values()].filter((p) => FIELDS.some((f) => p[f]));
   // Fill a missing value from another part of speech only when there is a single distinct value.

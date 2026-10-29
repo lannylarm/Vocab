@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseMw, cleanMarkup, mwAudioUrl } from '../sources/mw.js';
 import { parseWikt } from '../sources/wiktionary.js';
 import { mergePron } from '../sources/pron.js';
+import { arpabetToIpa, parseCmu } from '../sources/cmu.js';
 
 // --- MW markup ---
 assert.equal(cleanMarkup('{bc}to move {it}quickly{/it} on foot'), 'to move quickly on foot');
@@ -103,5 +104,14 @@ assert.deepEqual(merged, [{ pos: 'noun', uk: '/təˈmɑːtəʊ/', us: '/təˈme�
 
 const untagged = parseWikt([{ word: 'cat', lang_code: 'en', pos: 'noun', sounds: [{ ipa: '/kæt/' }], senses: [{ glosses: ['An animal.'] }] }]);
 assert.deepEqual(untagged.pron[0], { pos: 'noun', uk: '/kæt/', us: '/kæt/', ukAudio: null, usAudio: null }, 'untagged IPA applies to both');
+
+// --- CMU (ARPAbet -> IPA) ---
+assert.equal(arpabetToIpa('AH0 B AW1 T'), '/əˈbaʊt/');
+assert.equal(arpabetToIpa('S W AA1 P'), '/ˈswɑp/');
+assert.equal(arpabetToIpa('K ER0 F AH1 F AH0 L'), '/kɚˈfʌfəl/');
+assert.equal(arpabetToIpa('EH1 K S T R AH0'), '/ˈɛkstrə/');
+assert.equal(arpabetToIpa('AH2 N D ER0 S T AE1 N D'), '/ˌʌndɚˈstænd/');
+const cmu = parseCmu(';;; c\nrecord R EH1 K ER0 D\nrecord(2) R IH0 K AO1 R D # verb\n');
+assert.deepEqual(cmu.get('record'), ['R EH1 K ER0 D', 'R IH0 K AO1 R D']);
 
 console.log('All parser tests passed.');

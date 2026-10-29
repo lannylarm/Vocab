@@ -6,7 +6,8 @@ import { pool, initDb, cached } from './db.js';
 import { mwFetch, parseMw } from './sources/mw.js';
 import { wiktFetch, parseWikt } from './sources/wiktionary.js';
 import { mergePron } from './sources/pron.js';
-import { aiMeanings, aiReviewMaterial, BLANK } from './ai.js';
+import { aiMeanings, aiReviewMaterial, aiIpa, BLANK, MATERIAL_VERSION } from './ai.js';
+import { cmuIpa, preloadCmu } from './sources/cmu.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -14,7 +15,7 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
 
 // Bump when parsers change so cached results are re-parsed.
-const PARSER_VERSION = 3;
+const PARSER_VERSION = 4;
 const MW_LEARNERS_KEY = process.env.MW_LEARNERS_KEY;
 const MW_COLLEGIATE_KEY = process.env.MW_COLLEGIATE_KEY;
 
@@ -35,11 +36,26 @@ function isAuthed(req) {
 
 app.get('/api/auth-status', (req, res) => res.json({ required: !!PASSCODE, ok: isAuthed(req) }));
 
+// Slow down passcode guessing: at most 10 wrong attempts per IP per 15 minutes.
+const loginFails = new Map();
+const FAIL_WINDOW_MS = 15 * 60 * 1000;
+function tooManyFails(ip) {
+  const now = Date.now();
+  const list = (loginFails.get(ip) || []).filter((t) => now - t < FAIL_WINDOW_MS);
+  loginFails.set(ip, list);
+  return list.length >= 10;
+}
+
 app.post('/api/login', (req, res) => {
+  if (tooManyFails(req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
   const given = String(req.body?.passcode || '');
   const a = crypto.createHash('sha256').update(given).digest();
   const b = crypto.createHash('sha256').update(PASSCODE).digest();
-  if (!PASSCODE || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Wrong passcode' });
+  if (!PASSCODE || !crypto.timingSafeEqual(a, b)) {
+    loginFails.get(req.ip).push(Date.now());
+    return res.status(401).json({ error: 'Wrong passcode' });
+  }
+  loginFails.delete(req.ip);
   const secure = req.secure ? '; Secure' : '';
   res.setHeader('Set-Cookie', `vocab_auth=${TOKEN}; HttpOnly; Path=/; Max-Age=31536000; SameSite=Lax${secure}`);
   res.json({ ok: true });
@@ -59,6 +75,16 @@ function profileId(req) {
   if (!Number.isInteger(id) || id <= 0) {
     const e = new Error('Choose a profile first');
     e.status = 400;
+    throw e;
+  }
+  return id;
+}
+
+function rowId(req) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    const e = new Error('Not found');
+    e.status = 404;
     throw e;
   }
   return id;
@@ -143,9 +169,11 @@ app.get('/api/lookup', wrap(async (req, res) => {
   }
   sources.push(await wiktP);
 
-  // Nothing from any dictionary: ask the model.
+  // Nothing from any dictionary: ask the model — unless the dictionaries point to a base form
+  // (e.g. "swapped" -> "swap"), in which case the page offers that word instead.
   const total = sources.reduce((n, s) => n + s.senses.length, 0);
-  if (!total && process.env.OPENAI_API_KEY) {
+  const hasSuggestions = sources.some((s) => (s.suggestions || []).length);
+  if (!total && !hasSuggestions && process.env.OPENAI_API_KEY) {
     sources.push(
       await sourceResult('ai', 'AI (not from a dictionary)', async () => ({
         senses: await cached(`ai@${PARSER_VERSION}`, q, () => aiMeanings(q)),
@@ -157,6 +185,15 @@ app.get('/api/lookup', wrap(async (req, res) => {
 
   // UK/US IPA for single words only (not phrases).
   const pronunciations = q.includes(' ') ? [] : mergePron(sources);
+  // Missing US IPA: fill from the CMU Pronouncing Dictionary (General American).
+  const hasSenses = sources.some((s) => s.senses.length);
+  if (!q.includes(' ') && hasSenses && (!pronunciations.length || pronunciations.some((p) => !p.us))) {
+    const us = await cmuIpa(q);
+    if (us) {
+      if (!pronunciations.length) pronunciations.push({ pos: '', uk: null, us, ukAudio: null, usAudio: null });
+      for (const p of pronunciations) p.us ??= us;
+    }
+  }
   if (pronunciations.length) {
     for (const s of sources) {
       for (const it of s.senses) {
@@ -190,6 +227,14 @@ app.get('/api/lookup', wrap(async (req, res) => {
   res.json({ query: q, sources, suggestions, pronunciations });
 }));
 
+// Last-resort IPA from AI for single words no dictionary covers (shown with an "AI" label).
+app.get('/api/ai-ipa', wrap(async (req, res) => {
+  const q = cleanQuery(req.query.q);
+  if (!q || q.includes(' ')) return res.json({ uk: null, us: null });
+  if (!process.env.OPENAI_API_KEY) return res.json({ uk: null, us: null });
+  res.json(await cached('ai-ipa@1', q, () => aiIpa(q)));
+}));
+
 app.post('/api/ai-more', wrap(async (req, res) => {
   const q = cleanQuery(req.body?.q);
   if (!q) return res.status(400).json({ error: 'Missing term' });
@@ -210,33 +255,46 @@ function safeAudio(u) {
 
 app.post('/api/save', wrap(async (req, res) => {
   const pid = profileId(req);
-  const items = (req.body?.items || []).slice(0, 30);
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 30) : [];
   const inserted = [];
+  const str = (v, max) => String(v ?? '').trim().slice(0, max);
   await Promise.all(
     items.map(async (it) => {
+      if (!it || typeof it !== 'object') return;
       const headword = cleanQuery(it.headword);
-      const definition = String(it.definition || '').trim();
+      const definition = str(it.definition, 1000);
       if (!headword || !definition) return;
+      const labels = Array.isArray(it.labels) ? it.labels.map((l) => str(l, 40)).filter(Boolean).slice(0, 10) : [];
+      const ipa = (v) => (headword.includes(' ') ? null : str(v, 80) || null);
       // Save immediately; practice sentences are generated in the background.
       const r = await pool.query(
         `INSERT INTO vocab_senses
            (profile_id, headword, entry_type, pos, definition, example, labels, source,
-            ipa_uk, ipa_us, audio_uk, audio_us)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT DO NOTHING
          RETURNING *`,
         [
-          pid, headword, headword.includes(' ') ? 'phrase' : 'word', it.pos || '', definition,
-          it.example || '', (it.labels || []).map(String), String(it.source || 'unknown'),
-          headword.includes(' ') ? null : it.ipa_uk || null,
-          headword.includes(' ') ? null : it.ipa_us || null,
+          pid, headword, headword.includes(' ') ? 'phrase' : 'word', str(it.pos, 40), definition,
+          str(it.example, 500), labels, str(it.source, 30) || 'unknown',
+          ipa(it.ipa_uk),
+          ipa(it.ipa_us),
           headword.includes(' ') ? null : safeAudio(it.audio_uk),
           headword.includes(' ') ? null : safeAudio(it.audio_us),
+          !!it.ipa_uk_ai && !headword.includes(' '),
+          !!it.ipa_us_ai && !headword.includes(' '),
         ]
       );
       inserted.push(...r.rows);
     })
-  );
+  ).catch((err) => {
+    if (err.code === '23503') { // foreign key: the learner no longer exists
+      const e = new Error('This learner no longer exists. Reload the page.');
+      e.status = 400;
+      throw e;
+    }
+    throw err;
+  });
   res.json({ saved: inserted.length });
   for (const row of inserted) {
     regenerate(row).catch((err) => console.error('background sentences failed', row.id, err.message));
@@ -246,7 +304,7 @@ app.post('/api/save', wrap(async (req, res) => {
 app.get('/api/words', wrap(async (req, res) => {
   const pid = profileId(req);
   const r = await pool.query(
-    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us, audio_uk, audio_us,
+    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai,
             correct_count, wrong_count, jsonb_array_length(variants) AS sentence_count, created_at
      FROM vocab_senses WHERE profile_id=$1 ORDER BY created_at DESC`,
     [pid]
@@ -256,7 +314,7 @@ app.get('/api/words', wrap(async (req, res) => {
 
 app.delete('/api/words/:id', wrap(async (req, res) => {
   const pid = profileId(req);
-  await pool.query('DELETE FROM vocab_senses WHERE id=$1 AND profile_id=$2', [req.params.id, pid]);
+  await pool.query('DELETE FROM vocab_senses WHERE id=$1 AND profile_id=$2', [rowId(req), pid]);
   res.json({ ok: true });
 }));
 
@@ -270,10 +328,16 @@ function regenerate(row) {
   return generating.get(row.id);
 }
 
-/** After a restart, finish any saved meanings that still have no practice sentences. */
+/**
+ * After a restart, finish saved meanings that have no practice sentences, or whose sentences were made
+ * by an older version of the generator (e.g. 3 instead of 4 similar words). Each row is redone only once.
+ */
 async function backfillSentences() {
   const r = await pool.query(
-    "SELECT * FROM vocab_senses WHERE jsonb_array_length(variants) = 0 ORDER BY created_at LIMIT 100"
+    `SELECT * FROM vocab_senses
+     WHERE jsonb_array_length(variants) = 0 OR material_version < $1
+     ORDER BY created_at LIMIT 200`,
+    [MATERIAL_VERSION]
   );
   for (const row of r.rows) {
     try {
@@ -288,15 +352,16 @@ async function doRegenerate(row) {
   const m = await aiReviewMaterial({
     headword: row.headword, pos: row.pos, definition: row.definition, example: row.example,
   });
-  await pool.query('UPDATE vocab_senses SET variants=$1, distractors=$2, next_variant=0 WHERE id=$3', [
-    JSON.stringify(m.variants), JSON.stringify(m.distractors), row.id,
-  ]);
-  return { ...row, variants: m.variants, distractors: m.distractors, next_variant: 0 };
+  await pool.query(
+    'UPDATE vocab_senses SET variants=$1, distractors=$2, next_variant=0, material_version=$3 WHERE id=$4',
+    [JSON.stringify(m.variants), JSON.stringify(m.distractors), MATERIAL_VERSION, row.id]
+  );
+  return { ...row, variants: m.variants, distractors: m.distractors, next_variant: 0, material_version: MATERIAL_VERSION };
 }
 
 app.post('/api/words/:id/regenerate', wrap(async (req, res) => {
   const pid = profileId(req);
-  const r = await pool.query('SELECT * FROM vocab_senses WHERE id=$1 AND profile_id=$2', [req.params.id, pid]);
+  const r = await pool.query('SELECT * FROM vocab_senses WHERE id=$1 AND profile_id=$2', [rowId(req), pid]);
   if (!r.rows[0]) return res.status(404).json({ error: 'Not found' });
   await regenerate(r.rows[0]);
   res.json({ ok: true });
@@ -349,16 +414,26 @@ app.get('/api/review', wrap(async (req, res) => {
 
 app.post('/api/review/:id/answer', wrap(async (req, res) => {
   const pid = profileId(req);
-  const r = await pool.query('SELECT * FROM vocab_senses WHERE id=$1 AND profile_id=$2', [req.params.id, pid]);
+  const r = await pool.query('SELECT * FROM vocab_senses WHERE id=$1 AND profile_id=$2', [rowId(req), pid]);
   const row = r.rows[0];
   if (!row) return res.status(404).json({ error: 'Not found' });
-  const vi = Math.max(0, parseInt(req.body?.variant, 10) || 0) % Math.max(1, row.variants.length);
-  const v = row.variants[vi] || { sentence: '', answer: row.headword };
+  const variants = Array.isArray(row.variants) ? row.variants : [];
+  const shown = String(req.body?.sentence || '');
+  // Find the sentence the learner saw. If the sentences were regenerated meanwhile, it may be gone:
+  // then accept the headword or any known form of it.
+  let v = variants.find((x) => x.sentence === shown);
+  if (!v && !shown) v = variants[Math.max(0, parseInt(req.body?.variant, 10) || 0) % Math.max(1, variants.length)];
   const input = normAnswer(req.body?.input);
+  const forms = new Set([normAnswer(row.headword), ...variants.map((x) => normAnswer(x.answer))]);
 
   let result = 'wrong';
-  if (input && input === normAnswer(v.answer)) result = 'correct';
-  else if (input && input === normAnswer(row.headword)) result = 'form'; // right word, wrong form
+  if (v) {
+    if (input && input === normAnswer(v.answer)) result = 'correct';
+    else if (input && input === normAnswer(row.headword)) result = 'form'; // right word, wrong form
+  } else {
+    v = { sentence: shown, answer: row.headword };
+    if (input && forms.has(input)) result = 'correct';
+  }
 
   const correct = result !== 'wrong';
   const level = correct ? Math.min(row.level + 1, INTERVALS.length - 1) : 0;
@@ -374,7 +449,6 @@ app.post('/api/review/:id/answer', wrap(async (req, res) => {
     result,
     answer: v.answer,
     headword: row.headword,
-    fullSentence: v.sentence.replace(BLANK, `[[${v.answer}]]`),
     definition: row.definition,
     example: row.example,
     pos: row.pos,
@@ -382,10 +456,14 @@ app.post('/api/review/:id/answer', wrap(async (req, res) => {
     ipa_us: row.ipa_us,
     audio_uk: row.audio_uk,
     audio_us: row.audio_us,
+    ipa_uk_ai: row.ipa_uk_ai,
+    ipa_us_ai: row.ipa_us_ai,
     entry_type: row.entry_type,
     nextInDays: correct ? INTERVALS[level] : 0,
   });
 }));
+
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ---------- Static ----------
 app.use(express.static(path.join(__dirname, 'public')));
@@ -398,6 +476,7 @@ const PORT = process.env.PORT || 3000;
 initDb()
   .then(() => {
     app.listen(PORT, () => console.log(`Vocab Builder listening on ${PORT}`));
+    preloadCmu();
     if (process.env.OPENAI_API_KEY) backfillSentences().catch((err) => console.error('backfill', err.message));
   })
   .catch((err) => {

@@ -135,3 +135,6 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 
 .topbar h1 { display: flex; align-items: center; gap: 10px; }
 .logo { width: 30px; height: 30px; border-radius: 7px; }
+
+/* keep each accent's label, IPA and speaker together when the line wraps */
+.pron-item { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }

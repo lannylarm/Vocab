@@ -25,27 +25,39 @@ function urlFor(word) {
   return `https://kaikki.org/dictionary/English/meaning/${encodeURIComponent(c1)}/${encodeURIComponent(c2)}/${encodeURIComponent(word)}.jsonl`;
 }
 
+async function fetchPage(word) {
+  const res = await fetch(urlFor(word), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`Wiktionary HTTP ${res.status}`);
+  const text = await res.text();
+  return text
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => {
+      try { return JSON.parse(l); } catch { return null; }
+    })
+    .filter((e) => e && (e.lang_code === 'en' || e.lang === 'English'));
+}
+
+/**
+ * Fetch the word as typed, in lower case and capitalised (e.g. "kiwi" and "Kiwi" — a New Zealander).
+ * Proper names from the capitalised page are skipped. Network errors throw (so they are not cached
+ * as "not found"); a missing page is just empty.
+ */
 export async function wiktFetch(query) {
   const w = query.trim();
-  const tries = [...new Set([w, w.toLowerCase()])];
-  for (const t of tries) {
-    try {
-      const res = await fetch(urlFor(t), { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(10000) });
-      if (!res.ok) continue;
-      const text = await res.text();
-      const entries = text
-        .split('\n')
-        .filter(Boolean)
-        .map((l) => {
-          try { return JSON.parse(l); } catch { return null; }
-        })
-        .filter((e) => e && (e.lang_code === 'en' || e.lang === 'English'));
-      if (entries.length) return entries;
-    } catch {
-      /* try next form */
-    }
-  }
-  return [];
+  const lower = w.toLowerCase();
+  const cap = lower.charAt(0).toUpperCase() + lower.slice(1);
+  const forms = [...new Set([w, lower, cap])];
+  const results = await Promise.allSettled(forms.map(fetchPage));
+  if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
+  const entries = [];
+  results.forEach((r, i) => {
+    if (r.status !== 'fulfilled') return;
+    const extraForm = forms[i] !== w && forms[i] !== lower;
+    for (const e of r.value) if (!(extraForm && e.pos === 'name')) entries.push(e);
+  });
+  return entries;
 }
 
 const UK_TAGS = new Set(['Received-Pronunciation', 'UK', 'British', 'Standard-Southern-British']);

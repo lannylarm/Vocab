@@ -189,7 +189,7 @@ export function mwPron(e) {
   let us = null;
   let ukAudio = null;
   let usAudio = null;
-  for (const p of e.hwi?.prs || []) {
+  for (const p of [...(e.hwi?.prs || []), ...(e.hwi?.altprs || [])]) {
     const label = `${p.l || ''} ${p.l2 || ''}`;
     const isUk = /brit/i.test(label);
     const isUs = !label.trim() || /us|american/i.test(label);
