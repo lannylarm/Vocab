@@ -273,7 +273,7 @@ $('#lookupForm').addEventListener('submit', (e) => {
 });
 
 let lookupSeq = 0;
-async function runLookup(q, { autoplay = true } = {}) {
+async function runLookup(q, { autoplay = true, showLibrary = true } = {}) {
   const seq = ++lookupSeq;
   $('#lookupInput').value = q;
   state.selected.clear();
@@ -283,6 +283,7 @@ async function runLookup(q, { autoplay = true } = {}) {
     const data = await api(`/api/lookup?q=${encodeURIComponent(q)}`);
     if (seq !== lookupSeq) return; // a newer search was started meanwhile
     state.lookup = data;
+    state.lookup.showLibrary = showLibrary;
     renderLookup({ autoplay });
   } catch (err) {
     if (seq === lookupSeq) $('#lookupResults').innerHTML = `<p class="error">${esc(err.message)}</p>`;
@@ -351,7 +352,8 @@ function renderLookup({ autoplay = true } = {}) {
 
   if (!total) html = `<p class="muted">No dictionary entry found for “${esc(query)}”.</p>` + html;
   // Already in the word list?
-  const lib = state.lookup.inLibrary || [];
+  // Only when the word was already saved before this search — not right after saving it here.
+  const lib = state.lookup.showLibrary === false ? [] : state.lookup.inLibrary || [];
   if (lib.length) {
     html = lib.map((l) => {
       const same = l.headword.toLowerCase() === query.toLowerCase();
@@ -496,7 +498,8 @@ $('#saveBtn').addEventListener('click', async () => {
     toast(r.saved
       ? `Saved ${r.saved} meaning${r.saved === 1 ? '' : 's'}. Practice sentences are being prepared.`
       : 'Already saved.');
-    await runLookup(state.lookup.query, { autoplay: false });
+    // Refresh to mark the new meanings "saved", without the "already in your word list" notice.
+    await runLookup(state.lookup.query, { autoplay: false, showLibrary: false });
     refreshStats();
   } catch (err) {
     toast(err.message);
