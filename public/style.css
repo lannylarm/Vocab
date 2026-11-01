@@ -142,3 +142,16 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 .in-library { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; padding: 10px 14px;
   border-radius: var(--radius); background: var(--good-soft); color: var(--good); font-weight: 600; }
 .in-library button { font-weight: 500; }
+
+/* spelling drill */
+.drill { margin-top: 14px; padding: 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); display: grid; gap: 10px; }
+.drill p { margin: 0; }
+.drill-title { font-weight: 700; }
+.drill-title.good { color: var(--good); }
+.drill-word { font-size: 34px; font-weight: 700; letter-spacing: .04em; color: var(--accent); word-break: break-word; }
+.drill-word .miss { color: var(--bad); text-decoration: underline; text-decoration-thickness: 3px; text-underline-offset: 6px; }
+.drill-word .syl-dot { color: var(--muted); font-weight: 400; margin: 0 2px; }
+.drill-dots { display: flex; gap: 6px; }
+.drill-dots span { width: 12px; height: 12px; border-radius: 50%; background: var(--line); }
+.drill-dots span.on { background: var(--good); }
+.link-btn { background: none; color: var(--muted); padding: 4px 0; font-weight: 400; text-decoration: underline; justify-self: start; }

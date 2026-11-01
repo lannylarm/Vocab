@@ -157,7 +157,9 @@ export async function aiIpa(word) {
     IPA_SCHEMA,
     `You give dictionary-style IPA transcriptions of English words, like a learner's dictionary
 (UK: standard Southern British; US: General American). Use slashes and a primary stress mark, e.g. /ˈwɔːtə/ and /ˈwɑːtər/.
-If the word is not a real English word, or you are not confident of its pronunciation, return an empty string for that accent.`,
+This includes brand names, product names, place names and other proper nouns used in English (e.g. "Codral", "Panadol"):
+give the pronunciation English speakers normally use.
+Return an empty string for an accent only if the input is gibberish or you genuinely cannot tell how it is said.`,
     `Word: "${word}"`
   );
   const clean = (s) => {
@@ -187,4 +189,29 @@ export async function aiSpeech(text, accent) {
     response_format: 'mp3',
   });
   return Buffer.from(await r.arrayBuffer());
+}
+
+const SYLL_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['syllables'],
+  properties: { syllables: { type: 'string' } },
+};
+
+/**
+ * Split a word or phrase into written syllables with "·", keeping every letter in order,
+ * e.g. "necessary" -> "nec·es·sar·y", "fender bender" -> "fen·der ben·der".
+ * Returns null if the model's answer does not spell exactly the same letters.
+ */
+export async function aiSyllables(text) {
+  const data = await jsonCall(
+    'syllables',
+    SYLL_SCHEMA,
+    `You split English words into written syllables for spelling practice, the way a learner's dictionary
+shows them (e.g. "necessary" -> "nec·es·sar·y", "beautiful" -> "beau·ti·ful"). Separate syllables with "·".
+Keep spaces between words, keep hyphens and apostrophes, and never add, remove or change any letter.`,
+    `Text: "${text}"`
+  );
+  const s = String(data.syllables || '').trim();
+  return s.replace(/·/g, '') === text ? s : null;
 }

@@ -6,7 +6,7 @@ import { pool, initDb, cached } from './db.js';
 import { mwFetch, parseMw } from './sources/mw.js';
 import { wiktFetch, parseWikt } from './sources/wiktionary.js';
 import { mergePron } from './sources/pron.js';
-import { aiMeanings, aiReviewMaterial, aiIpa, aiSpeech, TTS_ID, BLANK, MATERIAL_VERSION } from './ai.js';
+import { aiMeanings, aiReviewMaterial, aiIpa, aiSpeech, aiSyllables, TTS_ID, BLANK, MATERIAL_VERSION } from './ai.js';
 import { cmuIpa, preloadCmu } from './sources/cmu.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -235,12 +235,14 @@ app.get('/api/lookup', wrap(async (req, res) => {
   res.json({ query: q, sources, suggestions, pronunciations, inLibrary });
 }));
 
+const AI_IPA_CACHE = 'ai-ipa@2';
+
 // Last-resort IPA from AI for single words no dictionary covers (shown with an "AI" label).
 app.get('/api/ai-ipa', wrap(async (req, res) => {
   const q = cleanQuery(req.query.q);
   if (!q || q.includes(' ')) return res.json({ uk: null, us: null });
   if (!process.env.OPENAI_API_KEY) return res.json({ uk: null, us: null });
-  res.json(await cached('ai-ipa@1', q, () => aiIpa(q)));
+  res.json(await cached(AI_IPA_CACHE, q, () => aiIpa(q)));
 }));
 
 // Pronunciation audio for words/phrases without a dictionary recording; generated once, then cached.
@@ -272,6 +274,19 @@ app.get('/api/tts', wrap(async (req, res) => {
   res.setHeader('Content-Length', buf.length);
   res.setHeader('Cache-Control', 'private, max-age=2592000');
   res.end(buf);
+}));
+
+// Syllable split for spelling practice (cached; falls back to the plain word).
+app.get('/api/syllables', wrap(async (req, res) => {
+  const text = cleanQuery(req.query.text);
+  if (!text) return res.status(400).json({ error: 'Missing text' });
+  if (!process.env.OPENAI_API_KEY || !/^[\p{L}' -]+$/u.test(text)) return res.json({ syllables: text });
+  try {
+    const r = await cached('syllables@1', text, async () => ({ syllables: (await aiSyllables(text)) || text }));
+    res.json({ syllables: r.syllables.replace(/·/g, '') === text ? r.syllables : text });
+  } catch {
+    res.json({ syllables: text });
+  }
 }));
 
 app.post('/api/ai-more', wrap(async (req, res) => {
@@ -337,6 +352,7 @@ app.post('/api/save', wrap(async (req, res) => {
   res.json({ saved: inserted.length });
   for (const row of inserted) {
     regenerate(row).catch((err) => console.error('background sentences failed', row.id, err.message));
+    fillIpa(row).catch((err) => console.error('background IPA failed', row.id, err.message));
   }
 }));
 
@@ -371,6 +387,43 @@ function regenerate(row) {
  * After a restart, finish saved meanings that have no practice sentences, or whose sentences were made
  * by an older version of the generator (e.g. 3 instead of 4 similar words). Each row is redone only once.
  */
+/**
+ * Single words saved without UK/US IPA (brand names, rare words, or saved before the AI step finished):
+ * US from the CMU dictionary, anything still missing from AI (flagged "AI"). Each row is tried once.
+ */
+async function fillIpa(row) {
+  if (row.entry_type !== 'word' || row.ipa_checked || (row.ipa_uk && row.ipa_us)) return;
+  let uk = row.ipa_uk;
+  let us = row.ipa_us;
+  let ukAi = row.ipa_uk_ai;
+  let usAi = row.ipa_us_ai;
+  if (!us) us = await cmuIpa(row.headword, 20000);
+  if ((!uk || !us) && process.env.OPENAI_API_KEY) {
+    const ai = await cached(AI_IPA_CACHE, row.headword, () => aiIpa(row.headword));
+    if (!uk && ai.uk) { uk = ai.uk; ukAi = true; }
+    if (!us && ai.us) { us = ai.us; usAi = true; }
+  }
+  await pool.query(
+    `UPDATE vocab_senses SET ipa_uk=$1, ipa_us=$2, ipa_uk_ai=$3, ipa_us_ai=$4, ipa_checked=true WHERE id=$5`,
+    [uk || null, us || null, !!ukAi, !!usAi, row.id]
+  );
+}
+
+async function backfillIpa() {
+  const r = await pool.query(
+    `SELECT * FROM vocab_senses
+     WHERE entry_type='word' AND NOT ipa_checked AND (ipa_uk IS NULL OR ipa_us IS NULL)
+     ORDER BY created_at LIMIT 300`
+  );
+  for (const row of r.rows) {
+    try {
+      await fillIpa(row);
+    } catch (err) {
+      console.error('IPA backfill failed', row.id, err.message);
+    }
+  }
+}
+
 async function backfillSentences() {
   const r = await pool.query(
     `SELECT * FROM vocab_senses
@@ -517,6 +570,7 @@ initDb()
     app.listen(PORT, () => console.log(`Vocab Builder listening on ${PORT}`));
     preloadCmu();
     if (process.env.OPENAI_API_KEY) backfillSentences().catch((err) => console.error('backfill', err.message));
+    backfillIpa().catch((err) => console.error('IPA backfill', err.message));
   })
   .catch((err) => {
     console.error('Database init failed:', err);

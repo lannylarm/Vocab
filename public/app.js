@@ -556,6 +556,8 @@ function showReviewItem() {
   $('#reviewSentence').innerHTML = sentenceHtml(item.sentence);
   $('#reviewOptions').innerHTML = item.options.map((o) => `<span class="option">${esc(o)}</span>`).join('');
   $('#reviewFeedback').className = 'feedback hidden';
+  $('#drill').className = 'drill hidden';
+  $('#drill').innerHTML = '';
   $('#nextBtn').classList.add('hidden');
   $('#answerInput').value = '';
   $('#answerInput').disabled = false;
@@ -597,8 +599,15 @@ $('#answerForm').addEventListener('submit', async (e) => {
       <div class="def">${esc(res.definition)}</div>
       ${res.example ? `<div class="ex">${esc(res.example)}</div>` : ''}
       ${next ? `<div class="muted" style="margin-top:6px;font-size:14px">${esc(next)}</div>` : ''}`;
-    $('#nextBtn').classList.remove('hidden');
-    $('#nextBtn').focus();
+    if (res.result === 'wrong') {
+      // Practise the form the sentence needed; use the dictionary recording when it is the headword itself.
+      const same = res.answer.trim().toLowerCase() === res.headword.trim().toLowerCase();
+      const rec = same ? (settings.accent === 'uk' ? res.audio_uk : res.audio_us) : '';
+      startDrill(res.answer, input, rec || '');
+    } else {
+      $('#nextBtn').classList.remove('hidden');
+      $('#nextBtn').focus();
+    }
     if (settings.autoplay) {
       // Say the base form (headword, e.g. "swap"), using the dictionary recording when there is one.
       const acc = settings.accent;
@@ -612,6 +621,140 @@ $('#answerForm').addEventListener('submit', async (e) => {
 });
 
 $('#nextBtn').addEventListener('click', nextItem);
+
+// ---------- Spelling drill: Look – Cover – Write – Check ----------
+const DRILL_NEEDED = 2; // correct in a row
+const drill = { target: '', syllables: '', streak: 0, lastTry: '', audio: '' };
+const normSpell = (s) => String(s || '').toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/\s+/g, ' ').trim();
+
+/** Positions in `target` that are not matched by `attempt` (longest common subsequence). */
+function missedPositions(target, attempt) {
+  const a = [...target.toLowerCase()];
+  const b = [...String(attempt || '').toLowerCase()];
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const missed = new Set();
+  let i = 0;
+  let j = 0;
+  while (i < a.length) {
+    if (j < b.length && a[i] === b[j]) { i++; j++; }
+    else if (j < b.length && dp[i][j + 1] >= dp[i + 1][j]) j++;
+    else { missed.add(i); i++; }
+  }
+  // Extra letters typed in the attempt are not shown in the target; a wrong-but-same-length
+  // letter shows up as missed here, which is what we want to highlight.
+  return missed;
+}
+
+/** The word split into syllables, with letters the learner got wrong highlighted. */
+function syllableHtml(target, syllables, attempt) {
+  const missed = attempt ? missedPositions(target, attempt) : new Set();
+  let k = 0;
+  let out = '';
+  for (const ch of syllables) {
+    if (ch === '·') { out += '<span class="syl-dot">·</span>'; continue; }
+    const cls = missed.has(k) ? ' class="miss"' : '';
+    out += `<span${cls}>${esc(ch)}</span>`;
+    k++;
+  }
+  return out;
+}
+
+async function startDrill(target, attempt, audio = '') {
+  Object.assign(drill, { target, syllables: target, streak: 0, lastTry: attempt, audio });
+  const box = $('#drill');
+  box.className = 'drill';
+  renderDrillLook();
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    const { syllables } = await api(`/api/syllables?text=${encodeURIComponent(target)}`);
+    if (drill.target === target && syllables) {
+      drill.syllables = syllables;
+      if (box.dataset.step === 'look') renderDrillLook();
+    }
+  } catch { /* keep the plain word */ }
+}
+
+function drillProgress() {
+  return `<div class="drill-dots">${Array.from({ length: DRILL_NEEDED }, (_, i) =>
+    `<span class="${i < drill.streak ? 'on' : ''}"></span>`).join('')}</div>`;
+}
+
+function renderDrillLook() {
+  const box = $('#drill');
+  box.dataset.step = 'look';
+  box.innerHTML = `
+    <div class="drill-title">Spelling practice — Look</div>
+    <p class="muted">Look carefully${drill.lastTry ? ' — the highlighted letters are the ones you missed' : ''}. Say it in parts.</p>
+    <div class="drill-word">${syllableHtml(drill.target, drill.syllables, drill.lastTry)}</div>
+    <div><button type="button" class="say" data-text="${esc(drill.target)}" data-acc="${settings.accent}"
+      data-lang="${settings.accent === 'uk' ? 'en-GB' : 'en-US'}" data-audio="${esc(drill.audio || ttsUrl(drill.target, settings.accent))}"
+      aria-label="Play pronunciation">🔊 Listen</button></div>
+    ${drillProgress()}
+    <button type="button" id="drillCover">Hide it and write it</button>
+    <button type="button" class="link-btn" id="drillSkip">Skip practice</button>`;
+  $('#drillCover').focus();
+}
+
+function renderDrillWrite() {
+  const box = $('#drill');
+  box.dataset.step = 'write';
+  box.innerHTML = `
+    <div class="drill-title">Spelling practice — Write (${drill.streak + 1} of ${DRILL_NEEDED})</div>
+    <p class="muted">Type it from memory.</p>
+    <form id="drillForm" class="search">
+      <input id="drillInput" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
+        placeholder="Type the word">
+      <button type="submit">Check</button>
+    </form>
+    ${drillProgress()}
+    <button type="button" class="link-btn" id="drillPeek">Show it again</button>`;
+  $('#drillInput').focus();
+}
+
+function finishDrill() {
+  const box = $('#drill');
+  box.dataset.step = 'done';
+  box.innerHTML = `<div class="drill-title good">✓ Well done — you spelled “${esc(drill.target)}” correctly ${DRILL_NEEDED} times.</div>`;
+  $('#nextBtn').classList.remove('hidden');
+  $('#nextBtn').focus();
+}
+
+$('#drill').addEventListener('click', (e) => {
+  if (e.target.id === 'drillCover') renderDrillWrite();
+  else if (e.target.id === 'drillPeek') { drill.streak = 0; drill.lastTry = ''; renderDrillLook(); }
+  else if (e.target.id === 'drillSkip') {
+    $('#drill').className = 'drill hidden';
+    $('#nextBtn').classList.remove('hidden');
+    $('#nextBtn').focus();
+  }
+});
+
+$('#drill').addEventListener('submit', (e) => {
+  if (e.target.id !== 'drillForm') return;
+  e.preventDefault();
+  const typed = $('#drillInput').value;
+  if (!typed.trim()) return;
+  if (normSpell(typed) === normSpell(drill.target)) {
+    drill.streak++;
+    drill.lastTry = '';
+    if (drill.streak >= DRILL_NEEDED) return finishDrill();
+    const box = $('#drill');
+    box.innerHTML = `<div class="drill-title good">✓ Correct! Once more.</div>
+      <div class="drill-word">${syllableHtml(drill.target, drill.syllables)}</div>${drillProgress()}`;
+    setTimeout(() => { if (box.dataset.step === 'write') renderDrillWrite(); }, 1200);
+  } else {
+    drill.streak = 0;
+    drill.lastTry = typed;
+    renderDrillLook();
+    const p = $('#drill .muted');
+    p.innerHTML = `Not quite — you typed “${esc(typed)}”. The highlighted letters are the ones you missed. Look again.`;
+  }
+});
 
 function nextItem() {
   const r = state.review;
