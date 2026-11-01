@@ -167,3 +167,24 @@ If the word is not a real English word, or you are not confident of its pronunci
   };
   return { uk: clean(data.uk), us: clean(data.us) };
 }
+
+// Text to speech for words/phrases with no dictionary recording (played like a recording, so it works
+// on iPhone in silent mode and outside a tap). Note: OpenAI lists gpt-4o-mini-tts as deprecated
+// (shutdown 2027-01-06); set OPENAI_TTS_MODEL to its replacement when available. Audio already
+// generated stays cached in the database.
+const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts';
+const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'marin';
+export const TTS_ID = `${TTS_MODEL}/${TTS_VOICE}`;
+
+export async function aiSpeech(text, accent) {
+  const r = await getClient().audio.speech.create({
+    model: TTS_MODEL,
+    voice: TTS_VOICE,
+    input: text,
+    instructions: accent === 'uk'
+      ? 'Say this English word or phrase once, clearly, at a natural dictionary pace, with a standard British (Southern English) accent. Nothing else.'
+      : 'Say this English word or phrase once, clearly, at a natural dictionary pace, with a General American accent. Nothing else.',
+    response_format: 'mp3',
+  });
+  return Buffer.from(await r.arrayBuffer());
+}

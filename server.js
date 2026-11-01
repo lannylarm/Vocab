@@ -6,7 +6,7 @@ import { pool, initDb, cached } from './db.js';
 import { mwFetch, parseMw } from './sources/mw.js';
 import { wiktFetch, parseWikt } from './sources/wiktionary.js';
 import { mergePron } from './sources/pron.js';
-import { aiMeanings, aiReviewMaterial, aiIpa, BLANK, MATERIAL_VERSION } from './ai.js';
+import { aiMeanings, aiReviewMaterial, aiIpa, aiSpeech, TTS_ID, BLANK, MATERIAL_VERSION } from './ai.js';
 import { cmuIpa, preloadCmu } from './sources/cmu.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -224,7 +224,15 @@ app.get('/api/lookup', wrap(async (req, res) => {
   const suggestions = [...new Set(sources.flatMap((s) => s.suggestions || []))]
     .filter((s) => s.toLowerCase() !== q.toLowerCase())
     .slice(0, 8);
-  res.json({ query: q, sources, suggestions, pronunciations });
+  // Is this word (or the base form it points to, e.g. "swapped" -> "swap") already in the word list?
+  const lib = await pool.query(
+    `SELECT min(headword) AS headword, count(*)::int AS count FROM vocab_senses
+     WHERE profile_id=$1 AND lower(headword) = ANY($2) GROUP BY lower(headword)`,
+    [pid, [q.toLowerCase(), ...suggestions.map((s) => s.toLowerCase())]]
+  );
+  const inLibrary = lib.rows.sort((a, b) =>
+    (b.headword.toLowerCase() === q.toLowerCase()) - (a.headword.toLowerCase() === q.toLowerCase()));
+  res.json({ query: q, sources, suggestions, pronunciations, inLibrary });
 }));
 
 // Last-resort IPA from AI for single words no dictionary covers (shown with an "AI" label).
@@ -233,6 +241,37 @@ app.get('/api/ai-ipa', wrap(async (req, res) => {
   if (!q || q.includes(' ')) return res.json({ uk: null, us: null });
   if (!process.env.OPENAI_API_KEY) return res.json({ uk: null, us: null });
   res.json(await cached('ai-ipa@1', q, () => aiIpa(q)));
+}));
+
+// Pronunciation audio for words/phrases without a dictionary recording; generated once, then cached.
+const ttsJobs = new Map();
+app.get('/api/tts', wrap(async (req, res) => {
+  const text = cleanQuery(req.query.text);
+  const accent = req.query.accent === 'uk' ? 'uk' : 'us';
+  if (!text || !/^[\p{L}\p{N}' .,\-]+$/u.test(text)) return res.status(400).json({ error: 'Bad text' });
+  if (!process.env.OPENAI_API_KEY) return res.status(404).json({ error: 'Speech not available' });
+  const key = `${TTS_ID}|${accent}|${text.toLowerCase()}`;
+  let row = (await pool.query('SELECT mime, data FROM vocab_tts WHERE key=$1', [key])).rows[0];
+  if (!row) {
+    if (!ttsJobs.has(key)) {
+      ttsJobs.set(key, (async () => {
+        const buf = await aiSpeech(text, accent);
+        const data = buf.toString('base64');
+        await pool.query(
+          'INSERT INTO vocab_tts (key, mime, data) VALUES ($1,$2,$3) ON CONFLICT (key) DO NOTHING',
+          [key, 'audio/mpeg', data]
+        );
+        return { mime: 'audio/mpeg', data };
+      })().finally(() => ttsJobs.delete(key)));
+    }
+    row = await ttsJobs.get(key);
+  }
+  const buf = Buffer.from(row.data, 'base64');
+  res.statusCode = 200;
+  res.setHeader('Content-Type', row.mime);
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Cache-Control', 'private, max-age=2592000');
+  res.end(buf);
 }));
 
 app.post('/api/ai-more', wrap(async (req, res) => {

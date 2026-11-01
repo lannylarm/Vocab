@@ -54,6 +54,13 @@ ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS ipa_uk_ai BOOLEAN NOT NULL DEF
 ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS ipa_us_ai BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE vocab_senses ADD COLUMN IF NOT EXISTS material_version INT NOT NULL DEFAULT 0;
 
+CREATE TABLE IF NOT EXISTS vocab_tts (
+  key TEXT PRIMARY KEY,
+  mime TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS vocab_senses_uniq
   ON vocab_senses (profile_id, lower(headword), md5(definition));
 CREATE INDEX IF NOT EXISTS vocab_senses_due

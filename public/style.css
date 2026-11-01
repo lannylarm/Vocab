@@ -138,3 +138,7 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 
 /* keep each accent's label, IPA and speaker together when the line wraps */
 .pron-item { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+
+.in-library { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; padding: 10px 14px;
+  border-radius: var(--radius); background: var(--good-soft); color: var(--good); font-weight: 600; }
+.in-library button { font-weight: 500; }
