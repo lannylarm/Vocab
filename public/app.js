@@ -739,6 +739,9 @@ $('#drill').addEventListener('submit', (e) => {
   e.preventDefault();
   const typed = $('#drillInput').value;
   if (!typed.trim()) return;
+  // Say the correct word after every attempt, right or wrong (inside the tap/Enter, so it also works on iPhone).
+  const acc = settings.accent;
+  say(drill.target, acc === 'uk' ? 'en-GB' : 'en-US', drill.audio || ttsUrl(drill.target, acc));
   if (normSpell(typed) === normSpell(drill.target)) {
     drill.streak++;
     drill.lastTry = '';
