@@ -155,3 +155,5 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 .drill-dots span { width: 12px; height: 12px; border-radius: 50%; background: var(--line); }
 .drill-dots span.on { background: var(--good); }
 .link-btn { background: none; color: var(--muted); padding: 4px 0; font-weight: 400; text-decoration: underline; justify-self: start; }
+
+.meaning { margin-top: 4px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }

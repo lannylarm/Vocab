@@ -102,6 +102,19 @@ const normAnswer = (s) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+/** Replace whole-word occurrences of any of `words` (case-insensitive) with "___". */
+function hideWord(text, words) {
+  let out = String(text || '');
+  const list = [...new Set(words.filter(Boolean).map((w) => w.trim()))].sort((a, b) => b.length - a.length);
+  for (const w of list) {
+    const e = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Also hide simple inflections of single words (swap -> swapping, swaps).
+    const tail = !/\s/.test(w) && w.length >= 4 ? '\\p{L}{0,4}' : '';
+    out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${e}${tail}(?![\\p{L}\\p{N}])`, 'giu'), '___');
+  }
+  return out;
+}
+
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -445,10 +458,10 @@ async function doRegenerate(row) {
     headword: row.headword, pos: row.pos, definition: row.definition, example: row.example,
   });
   await pool.query(
-    'UPDATE vocab_senses SET variants=$1, distractors=$2, next_variant=0, material_version=$3 WHERE id=$4',
-    [JSON.stringify(m.variants), JSON.stringify(m.distractors), MATERIAL_VERSION, row.id]
+    'UPDATE vocab_senses SET variants=$1, next_variant=0, material_version=$2 WHERE id=$3',
+    [JSON.stringify(m.variants), MATERIAL_VERSION, row.id]
   );
-  return { ...row, variants: m.variants, distractors: m.distractors, next_variant: 0, material_version: MATERIAL_VERSION };
+  return { ...row, variants: m.variants, next_variant: 0, material_version: MATERIAL_VERSION };
 }
 
 app.post('/api/words/:id/regenerate', wrap(async (req, res) => {
@@ -496,7 +509,8 @@ app.get('/api/review', wrap(async (req, res) => {
       id: row.id,
       variant: vi,
       sentence: v.sentence,
-      options: shuffle(row.distractors || []), // similar words only; the answer is never shown
+      // The saved English meaning, with the word itself hidden so it does not give the answer away.
+      definition: hideWord(row.definition, [row.headword, ...row.variants.map((x) => x.answer)]),
       pos: row.pos,
       level: row.level,
     });

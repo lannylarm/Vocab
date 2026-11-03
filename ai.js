@@ -77,7 +77,7 @@ export async function aiMeanings(term, known = []) {
 const REVIEW_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['variants', 'distractors'],
+  required: ['variants'],
   properties: {
     variants: {
       type: 'array',
@@ -91,7 +91,6 @@ const REVIEW_SCHEMA = {
         },
       },
     },
-    distractors: { type: 'array', items: { type: 'string' } },
   },
 };
 
@@ -99,20 +98,18 @@ const REVIEW_SYSTEM = `You create fill-in-the-blank practice for English learner
 
 export const BLANK = '_____';
 
-export const DISTRACTOR_COUNT = 4;
 // Bump when the practice material changes shape; older saved meanings are regenerated once.
+// (Not bumped for removing similar words: existing sentences are still fine.)
 export const MATERIAL_VERSION = 2;
 
-/** Generate 3 cloze sentences and 4 confusable distractors for one saved meaning. */
+/** Generate 3 cloze sentences for one saved meaning. */
 export async function aiReviewMaterial({ headword, pos, definition, example }) {
   const user = `Target: "${headword}"${pos ? ` (${pos})` : ''}
 Meaning to practise: "${definition}"${example ? `\nDictionary example: "${example}"` : ''}
 
-1. Write 3 different natural sentences (8–20 words) that use the target in THIS meaning only, with clear context clues.
+Write 3 different natural sentences (8–20 words) that use the target in THIS meaning only, with clear context clues.
    In each sentence replace the target, in whatever form fits the grammar (e.g. "took off", "runs"), with exactly ${BLANK} (five underscores).
-   Keep all words of a phrase together so one blank covers the whole target. Put the exact replaced text in "answer".
-2. Give 5 distractors: real English words or phrases with the same part of speech and a similar form or meaning,
-   which a learner might confuse with the target but which do NOT fit any of the sentences. Use their base form.`;
+   Keep all words of a phrase together so one blank covers the whole target. Put the exact replaced text in "answer".`;
   const data = await jsonCall('review', REVIEW_SCHEMA, REVIEW_SYSTEM, user);
 
   const variants = [];
@@ -133,11 +130,7 @@ Meaning to practise: "${definition}"${example ? `\nDictionary example: "${exampl
   }
   if (!variants.length) throw new Error('AI returned no usable practice sentences');
 
-  const hw = headword.toLowerCase();
-  const distractors = [...new Set((data.distractors || []).map((d) => d.trim()).filter(Boolean))]
-    .filter((d) => d.toLowerCase() !== hw && !variants.some((v) => v.answer.toLowerCase() === d.toLowerCase()))
-    .slice(0, DISTRACTOR_COUNT);
-  return { variants: variants.slice(0, 3), distractors };
+  return { variants: variants.slice(0, 3) };
 }
 
 const IPA_SCHEMA = {

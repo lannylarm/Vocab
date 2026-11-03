@@ -554,7 +554,7 @@ function showReviewItem() {
   r.answered = false;
   $('#reviewProgress').textContent = `${r.idx + 1} / ${r.queue.length}`;
   $('#reviewSentence').innerHTML = sentenceHtml(item.sentence);
-  $('#reviewOptions').innerHTML = item.options.map((o) => `<span class="option">${esc(o)}</span>`).join('');
+  $('#reviewMeaning').innerHTML = `${item.pos ? `<span class="pos">${esc(item.pos)}</span> ` : ''}${esc(item.definition || '')}`;
   $('#reviewFeedback').className = 'feedback hidden';
   $('#drill').className = 'drill hidden';
   $('#drill').innerHTML = '';
