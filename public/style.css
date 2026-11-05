@@ -157,3 +157,9 @@ details.phrases summary { cursor: pointer; color: var(--accent); font-weight: 60
 .link-btn { background: none; color: var(--muted); padding: 4px 0; font-weight: 400; text-decoration: underline; justify-self: start; }
 
 .meaning { margin-top: 4px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+
+.forms { margin: 2px 0; font-size: 15px; }
+.forms b { color: var(--accent); }
+.forms-tag { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); }
+.forms-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.forms-line .forms { margin: 0; }

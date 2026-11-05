@@ -8,6 +8,7 @@ import { wiktFetch, parseWikt } from './sources/wiktionary.js';
 import { mergePron } from './sources/pron.js';
 import { aiMeanings, aiReviewMaterial, aiIpa, aiSpeech, aiSyllables, TTS_ID, BLANK, MATERIAL_VERSION } from './ai.js';
 import { cmuIpa, preloadCmu } from './sources/cmu.js';
+import { irregularForms } from './sources/forms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -15,7 +16,7 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '200kb' }));
 
 // Bump when parsers change so cached results are re-parsed.
-const PARSER_VERSION = 4;
+const PARSER_VERSION = 5;
 const MW_LEARNERS_KEY = process.env.MW_LEARNERS_KEY;
 const MW_COLLEGIATE_KEY = process.env.MW_COLLEGIATE_KEY;
 
@@ -166,7 +167,7 @@ app.get('/api/lookup', wrap(async (req, res) => {
           parseMw(await mwFetch('learners', MW_LEARNERS_KEY, q), q, 'mw-learners')))
     : null;
   const wiktP = sourceResult('wiktionary', 'Wiktionary', () =>
-    cached(`wiktionary@${PARSER_VERSION}`, q, async () => parseWikt(await wiktFetch(q))));
+    cached(`wiktionary@${PARSER_VERSION}`, q, async () => parseWikt(await wiktFetch(q), 'wiktionary', q)));
 
   const sources = [];
   const learners = learnersP ? await learnersP : null;
@@ -245,10 +246,45 @@ app.get('/api/lookup', wrap(async (req, res) => {
   );
   const inLibrary = lib.rows.sort((a, b) =>
     (b.headword.toLowerCase() === q.toLowerCase()) - (a.headword.toLowerCase() === q.toLowerCase()));
-  res.json({ query: q, sources, suggestions, pronunciations, inLibrary });
+  // Irregular past / past participle and irregular plurals (single words only).
+  const irregular = q.includes(' ') ? [] : formsFromSources(q, sources);
+  for (const s of sources) {
+    for (const it of s.senses) {
+      if (it.headword.toLowerCase() !== q.toLowerCase()) continue;
+      const f = matchForms(irregular, it.pos);
+      if (f) it.forms = f;
+    }
+  }
+  res.json({ query: q, sources, suggestions, pronunciations, inLibrary, irregular });
 }));
 
 const AI_IPA_CACHE = 'ai-ipa@2';
+
+function formsFromSources(word, sources) {
+  const wk = sources.find((s) => s.id === 'wiktionary')?.forms || [];
+  const mw = sources.find((s) => s.id === 'mw-learners')?.forms?.length
+    ? sources.find((s) => s.id === 'mw-learners').forms
+    : sources.find((s) => s.id === 'mw-collegiate')?.forms || [];
+  return irregularForms(word, wk, mw);
+}
+
+/** The irregular forms that belong to a meaning's part of speech (verb or noun), without the pos field. */
+function matchForms(irregular, pos) {
+  const p = String(pos || '').toLowerCase();
+  const kind = /\bverb\b/.test(p) && !/phrasal/.test(p) ? 'verb' : /\bnoun\b/.test(p) ? 'noun' : null;
+  const f = kind && irregular.find((x) => x.pos === kind);
+  if (!f) return null;
+  return kind === 'verb' ? { past: f.past, pp: f.pp } : { plural: f.plural };
+}
+
+/** Validate forms sent by the page: { past, pp } or { plural }, short word lists only. */
+function cleanForms(f) {
+  if (!f || typeof f !== 'object') return null;
+  const list = (v) => (Array.isArray(v) ? v.map((x) => String(x).trim().slice(0, 40)).filter((x) => /^[\p{L}' -]+$/u.test(x)).slice(0, 4) : []);
+  const out = {};
+  for (const k of ['past', 'pp', 'plural']) { const l = list(f[k]); if (l.length) out[k] = l; }
+  return Object.keys(out).length ? out : null;
+}
 
 // Last-resort IPA from AI for single words no dictionary covers (shown with an "AI" label).
 app.get('/api/ai-ipa', wrap(async (req, res) => {
@@ -337,8 +373,8 @@ app.post('/api/save', wrap(async (req, res) => {
       const r = await pool.query(
         `INSERT INTO vocab_senses
            (profile_id, headword, entry_type, pos, definition, example, labels, source,
-            ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+            ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai, forms, forms_checked)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT DO NOTHING
          RETURNING *`,
         [
@@ -350,6 +386,8 @@ app.post('/api/save', wrap(async (req, res) => {
           headword.includes(' ') ? null : safeAudio(it.audio_us),
           !!it.ipa_uk_ai && !headword.includes(' '),
           !!it.ipa_us_ai && !headword.includes(' '),
+          headword.includes(' ') ? null : JSON.stringify(cleanForms(it.forms)),
+          headword.includes(' ') || !!it.forms_checked,
         ]
       );
       inserted.push(...r.rows);
@@ -366,13 +404,14 @@ app.post('/api/save', wrap(async (req, res) => {
   for (const row of inserted) {
     regenerate(row).catch((err) => console.error('background sentences failed', row.id, err.message));
     fillIpa(row).catch((err) => console.error('background IPA failed', row.id, err.message));
+    fillForms(row).catch((err) => console.error('background forms failed', row.id, err.message));
   }
 }));
 
 app.get('/api/words', wrap(async (req, res) => {
   const pid = profileId(req);
   const r = await pool.query(
-    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai,
+    `SELECT id, headword, entry_type, pos, definition, example, labels, source, level, due_at, ipa_uk, ipa_us, audio_uk, audio_us, ipa_uk_ai, ipa_us_ai, forms,
             correct_count, wrong_count, jsonb_array_length(variants) AS sentence_count, created_at
      FROM vocab_senses WHERE profile_id=$1 ORDER BY created_at DESC`,
     [pid]
@@ -420,6 +459,39 @@ async function fillIpa(row) {
     `UPDATE vocab_senses SET ipa_uk=$1, ipa_us=$2, ipa_uk_ai=$3, ipa_us_ai=$4, ipa_checked=true WHERE id=$5`,
     [uk || null, us || null, !!ukAi, !!usAi, row.id]
   );
+}
+
+/** Saved single-word verbs/nouns whose irregular forms were not stored yet (e.g. saved before this feature). */
+async function fillForms(row) {
+  if (row.entry_type !== 'word' || row.forms_checked) return;
+  if (!/\b(verb|noun)\b/i.test(row.pos || '') || /phrasal/i.test(row.pos || '')) {
+    await pool.query('UPDATE vocab_senses SET forms_checked=true WHERE id=$1', [row.id]);
+    return;
+  }
+  const q = cleanQuery(row.headword);
+  const sources = [];
+  sources.push({ id: 'wiktionary', forms: (await cached(`wiktionary@${PARSER_VERSION}`, q, async () => parseWikt(await wiktFetch(q), 'wiktionary', q))).forms });
+  if (MW_LEARNERS_KEY) {
+    try {
+      sources.push({ id: 'mw-learners', forms: (await cached(`mw-learners@${PARSER_VERSION}`, q, async () =>
+        parseMw(await mwFetch('learners', MW_LEARNERS_KEY, q), q, 'mw-learners'))).forms });
+    } catch { /* Wiktionary alone is fine */ }
+  }
+  const f = matchForms(formsFromSources(q, sources), row.pos);
+  await pool.query('UPDATE vocab_senses SET forms=$1, forms_checked=true WHERE id=$2', [JSON.stringify(f), row.id]);
+}
+
+async function backfillForms() {
+  const r = await pool.query(
+    `SELECT * FROM vocab_senses WHERE entry_type='word' AND NOT forms_checked ORDER BY created_at LIMIT 300`
+  );
+  for (const row of r.rows) {
+    try {
+      await fillForms(row);
+    } catch (err) {
+      console.error('forms backfill failed', row.id, err.message);
+    }
+  }
 }
 
 async function backfillIpa() {
@@ -564,6 +636,7 @@ app.post('/api/review/:id/answer', wrap(async (req, res) => {
     audio_us: row.audio_us,
     ipa_uk_ai: row.ipa_uk_ai,
     ipa_us_ai: row.ipa_us_ai,
+    forms: row.forms,
     entry_type: row.entry_type,
     nextInDays: correct ? INTERVALS[level] : 0,
   });
@@ -585,6 +658,7 @@ initDb()
     preloadCmu();
     if (process.env.OPENAI_API_KEY) backfillSentences().catch((err) => console.error('backfill', err.message));
     backfillIpa().catch((err) => console.error('IPA backfill', err.message));
+    backfillForms().catch((err) => console.error('forms backfill', err.message));
   })
   .catch((err) => {
     console.error('Database init failed:', err);

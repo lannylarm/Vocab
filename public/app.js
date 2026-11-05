@@ -28,6 +28,17 @@ const settings = {
  * UK / US rows: accent label, IPA (single words only), speaker button.
  * Plays the dictionary recording when there is one, otherwise the device's voice.
  */
+/** "past went · past participle gone" / "plural children" (only stored when irregular). */
+function formsHtml(f) {
+  if (!f) return '';
+  const b = (l) => l.map((x) => `<b>${esc(x)}</b>`).join(' / ');
+  const parts = [];
+  if (f.past?.length) parts.push(`past ${b(f.past)}`);
+  if (f.pp?.length) parts.push(`past participle ${b(f.pp)}`);
+  if (f.plural?.length) parts.push(`plural ${b(f.plural)}`);
+  return parts.length ? `<div class="forms"><span class="forms-tag">irregular</span> ${parts.join(' · ')}</div>` : '';
+}
+
 /** Server-generated audio for words/phrases that have no dictionary recording. */
 function ttsUrl(text, acc) {
   return `/api/tts?accent=${acc}&text=${encodeURIComponent(text)}`;
@@ -347,7 +358,9 @@ function renderLookup({ autoplay = true } = {}) {
     } else {
       rowsHtml = pronHtml(query, {}, !isPhrase);
     }
-    html = `<div class="pron-block" id="pronBlock"><div class="hw-big">${esc(query)}</div>${rowsHtml}</div>` + html;
+    const irr = (state.lookup.irregular || []).map((f) =>
+      `<div class="forms-line"><span class="pos">${esc(f.pos)}</span> ${formsHtml(f)}</div>`).join('');
+    html = `<div class="pron-block" id="pronBlock"><div class="hw-big">${esc(query)}</div>${rowsHtml}</div>${irr ? `<div class="pron-block">${irr}</div>` : ''}` + html;
   }
 
   if (!total) html = `<p class="muted">No dictionary entry found for “${esc(query)}”.</p>` + html;
@@ -489,6 +502,9 @@ $('#saveBtn').addEventListener('click', async () => {
       audio_us: it.audio_us || null,
       ipa_uk_ai: !!it.ipa_uk_ai,
       ipa_us_ai: !!it.ipa_us_ai,
+      forms: it.forms || null,
+      // Irregular forms were already checked for this word in the lookup.
+      forms_checked: (it.headword || '').toLowerCase() === state.lookup.query.toLowerCase(),
     };
   });
   btn.disabled = true;
@@ -596,6 +612,7 @@ $('#answerForm').addEventListener('submit', async (e) => {
     fb.innerHTML = `<div class="verdict">${esc(verdict)}</div>
       <div><strong>${esc(res.headword)}</strong> <span class="pos">${esc(res.pos)}</span></div>
       ${pronHtml(res.headword, { uk: res.ipa_uk, us: res.ipa_us, ukAudio: res.audio_uk, usAudio: res.audio_us, ukAi: res.ipa_uk_ai, usAi: res.ipa_us_ai }, res.entry_type === 'word')}
+      ${formsHtml(res.forms)}
       <div class="def">${esc(res.definition)}</div>
       ${res.example ? `<div class="ex">${esc(res.example)}</div>` : ''}
       ${next ? `<div class="muted" style="margin-top:6px;font-size:14px">${esc(next)}</div>` : ''}`;
@@ -822,6 +839,7 @@ function renderWords() {
         </div>
       </div>
       ${pronHtml(w.headword, { uk: w.ipa_uk, us: w.ipa_us, ukAudio: w.audio_uk, usAudio: w.audio_us, ukAi: w.ipa_uk_ai, usAi: w.ipa_us_ai }, w.entry_type === 'word')}
+      ${formsHtml(w.forms)}
       <div class="def">${esc(w.definition)}</div>
       ${w.example ? `<div class="ex">${esc(w.example)}</div>` : ''}
       <div class="stats">Level ${w.level} · ${dueText(w.due_at)} · ✓ ${w.correct_count} ✗ ${w.wrong_count}${w.sentence_count ? '' : ' · preparing sentences…'}</div>

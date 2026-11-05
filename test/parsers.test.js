@@ -4,6 +4,8 @@ import { parseMw, cleanMarkup, mwAudioUrl } from '../sources/mw.js';
 import { parseWikt } from '../sources/wiktionary.js';
 import { mergePron } from '../sources/pron.js';
 import { arpabetToIpa, parseCmu } from '../sources/cmu.js';
+import { wiktForms, mwForms, irregularForms, irregularOnly } from '../sources/forms.js';
+import { cleanMarkup as cm } from '../sources/mw.js';
 
 // --- MW markup ---
 assert.equal(cleanMarkup('{bc}to move {it}quickly{/it} on foot'), 'to move quickly on foot');
@@ -113,5 +115,34 @@ assert.equal(arpabetToIpa('EH1 K S T R AH0'), '/ˈɛkstrə/');
 assert.equal(arpabetToIpa('AH2 N D ER0 S T AE1 N D'), '/ˌʌndɚˈstænd/');
 const cmu = parseCmu(';;; c\nrecord R EH1 K ER0 D\nrecord(2) R IH0 K AO1 R D # verb\n');
 assert.deepEqual(cmu.get('record'), ['R EH1 K ER0 D', 'R IH0 K AO1 R D']);
+
+// --- Irregular forms ---
+const wGo = [{ word: 'go', pos: 'verb', forms: [
+  { form: 'goes', tags: ['present', 'singular', 'third-person'] }, { form: 'going', tags: ['participle', 'present'] },
+  { form: 'went', tags: ['past'] }, { form: 'gone', tags: ['participle', 'past'] }, { form: 'yede', tags: ['past', 'obsolete'] },
+  { form: 'en-verb', tags: ['inflection-template'] }] }];
+assert.deepEqual(irregularForms('go', wiktForms(wGo, 'go'), []), [{ pos: 'verb', past: ['went'], pp: ['gone'] }]);
+const wSwap = [{ word: 'swap', pos: 'verb', forms: [{ form: 'swapped', tags: ['past'] }, { form: 'swapped', tags: ['participle', 'past'] }] }];
+assert.deepEqual(irregularForms('swap', wiktForms(wSwap, 'swap'), []), [], 'regular verb not shown');
+const wDream = [{ word: 'dream', pos: 'verb', forms: [{ form: 'dreamed', tags: ['past'] }, { form: 'dreamt', tags: ['past'] },
+  { form: 'dreamed', tags: ['participle', 'past'] }, { form: 'dreamt', tags: ['participle', 'past'] }] }];
+assert.deepEqual(irregularForms('dream', wiktForms(wDream, 'dream'), []), [{ pos: 'verb', past: ['dreamed', 'dreamt'], pp: ['dreamed', 'dreamt'] }]);
+const wChild = [{ word: 'child', pos: 'noun', forms: [{ form: 'children', tags: ['plural'] }, { form: "children's", tags: ['plural', 'possessive'] }] }];
+assert.deepEqual(irregularForms('child', wiktForms(wChild, 'child'), []), [{ pos: 'noun', plural: ['children'] }]);
+for (const [w, pl] of [['city', 'cities'], ['box', 'boxes'], ['cat', 'cats'], ['potato', 'potatoes'], ['quiz', 'quizzes']]) {
+  assert.equal(irregularOnly(w, { pos: 'noun', plural: [pl] }), null, `${w} regular`);
+}
+for (const [w, pl] of [['sheep', 'sheep'], ['leaf', 'leaves'], ['mouse', 'mice'], ['cactus', 'cacti']]) {
+  assert.ok(irregularOnly(w, { pos: 'noun', plural: [pl] }), `${w} irregular`);
+}
+for (const [w, p] of [['stop', 'stopped'], ['try', 'tried'], ['bake', 'baked'], ['travel', 'travelled'], ['picnic', 'picnicked'], ['play', 'played']]) {
+  assert.equal(irregularOnly(w, { pos: 'verb', past: [p], pp: [p] }), null, `${w} regular`);
+}
+const mTake = [{ meta: { id: 'take:1' }, fl: 'verb', ins: [{ if: 'took' }, { if: 'tak*en' }, { if: 'tak*ing' }, { if: 'takes' }] },
+  { meta: { id: 'tooth' }, fl: 'noun', ins: [{ il: 'plural', if: 'teeth' }] }];
+assert.deepEqual(irregularForms('take', [], mwForms(mTake, 'take', cm)), [{ pos: 'verb', past: ['took'], pp: ['taken'] }]);
+assert.deepEqual(irregularForms('tooth', [], mwForms(mTake, 'tooth', cm)), [{ pos: 'noun', plural: ['teeth'] }]);
+const mPut = [{ meta: { id: 'put' }, fl: 'verb', ins: [{ if: 'put' }, { if: 'put*ting' }, { if: 'puts' }] }];
+assert.deepEqual(irregularForms('put', [], mwForms(mPut, 'put', cm)), [{ pos: 'verb', past: ['put'], pp: ['put'] }]);
 
 console.log('All parser tests passed.');

@@ -1,3 +1,4 @@
+import { mwForms } from './forms.js';
 // Merriam-Webster Dictionary API (Learner's and Collegiate) — fetch + parse.
 // Docs: https://dictionaryapi.com/products/json
 
@@ -128,7 +129,7 @@ function entryHeadword(e) {
  *  - phrases: idioms / phrasal verbs listed under the matching headword (single-word queries)
  */
 export function parseMw(json, query, source) {
-  const out = { senses: [], phrases: [], suggestions: [], pron: [] };
+  const out = { senses: [], phrases: [], suggestions: [], pron: [], forms: [] };
   if (!Array.isArray(json)) return out;
   if (json.length && typeof json[0] === 'string') {
     out.suggestions = json.slice(0, 8);
@@ -178,6 +179,7 @@ export function parseMw(json, query, source) {
     }
   }
 
+  out.forms = mwForms(entries, query, cleanMarkup);
   out.senses = dedupe(out.senses);
   out.phrases = dedupe(out.phrases).slice(0, 60);
   return out;

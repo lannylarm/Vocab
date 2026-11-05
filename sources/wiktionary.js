@@ -1,3 +1,4 @@
+import { wiktForms } from './forms.js';
 // Wiktionary data via kaikki.org (machine-readable extraction of English Wiktionary).
 // Per-word JSONL: https://kaikki.org/dictionary/English/meaning/<c1>/<c1c2>/<word>.jsonl
 // Licence: CC BY-SA 4.0 — attribute Wiktionary and kaikki.org.
@@ -95,8 +96,8 @@ export function wiktPron(sounds) {
   return { uk, us, ukAudio, usAudio };
 }
 
-export function parseWikt(entries, source = 'wiktionary') {
-  const out = { senses: [], phrases: [], suggestions: [], pron: [] };
+export function parseWikt(entries, source = 'wiktionary', query = '') {
+  const out = { senses: [], phrases: [], suggestions: [], pron: [], forms: query ? wiktForms(entries, query) : [] };
   const formOf = new Set();
   for (const e of entries || []) {
     const pos = POS_NAMES[e.pos] || e.pos || '';
